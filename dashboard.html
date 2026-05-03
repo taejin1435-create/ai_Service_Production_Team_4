@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>하수처리 폭기 제어 모니터링</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+    #root { padding: 28px 32px; max-width: 1100px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { useState, useEffect, useRef, useCallback } = React;
+const e = React.createElement;
+const API_BASE = 'http://localhost:8000';
+
+/* ── 스타일 상수 ── */
+const C = {
+  surface:  '#1e293b',
+  border:   '#334155',
+  muted:    '#64748b',
+  subtle:   '#94a3b8',
+  text:     '#e2e8f0',
+  green:    '#22c55e',
+  red:      '#f87171',
+  blue:     '#3b82f6',
+  greenBg:  '#14532d',
+  redBg:    '#450a0a',
+};
+
+/* ── 유틸 ── */
+const card = (extra = {}) => ({
+  background: C.surface,
+  borderRadius: 14,
+  border: `1px solid ${C.border}`,
+  padding: '20px 24px',
+  ...extra,
+});
+
+/* ── BarChart 컴포넌트 (Chart.js) ── */
+function StageBarChart({ stages }) {
+  const canvasRef = useRef(null);
+  const chartRef  = useRef(null);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    chartRef.current = new Chart(canvasRef.current, {
+      type: 'bar',
+      data: { labels: [], datasets: [{ label: 'MAE (분)', data: [], backgroundColor: [], borderColor: [], borderWidth: 2, borderRadius: 8 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(2)}분` }, backgroundColor: '#1e293b', borderColor: C.border, borderWidth: 1, titleColor: '#f1f5f9', bodyColor: C.subtle },
+        },
+        scales: {
+          x: { ticks: { color: C.subtle }, grid: { color: '#1e293b' } },
+          y: { ticks: { color: C.subtle, callback: v => v + '분' }, grid: { color: '#334155' }, suggestedMin: 0 },
+        },
+      },
+      plugins: [{
+        id: 'targetLine',
+        afterDraw(chart) {
+          const { ctx, scales: { y } } = chart;
+          const yPx = y.getPixelForValue(30);
+          ctx.save();
+          ctx.beginPath();
+          ctx.strokeStyle = C.blue; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+          ctx.moveTo(chart.chartArea.left, yPx); ctx.lineTo(chart.chartArea.right, yPx);
+          ctx.stroke();
+          ctx.fillStyle = C.blue; ctx.font = '11px Segoe UI';
+          ctx.fillText('목표 30분', chart.chartArea.right - 60, yPx - 6);
+          ctx.restore();
+        },
+      }],
+    });
+    return () => { chartRef.current?.destroy(); chartRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    if (!chartRef.current || !stages?.length) return;
+    const ch = chartRef.current;
+    ch.data.labels                           = stages.map(s => s.label);
+    ch.data.datasets[0].data                 = stages.map(s => s.mae);
+    ch.data.datasets[0].backgroundColor      = stages.map(s => s.mae < 30 ? '#22c55e99' : '#f8717199');
+    ch.data.datasets[0].borderColor          = stages.map(s => s.mae < 30 ? C.green : C.red);
+    ch.options.scales.y.suggestedMax         = Math.max(...stages.map(s => s.mae)) + 10;
+    ch.update('none');
+  }, [stages]);
+
+  return e('div', { style: card({ marginBottom: 20 }) },
+    e('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 16 } }, '구간별 MAE'),
+    e('div', { style: { height: 200 } }, e('canvas', { ref: canvasRef }))
+  );
+}
+
+/* ── 메트릭 카드 ── */
+function MetricCard({ label, value, target }) {
+  const ok = value != null && value < target;
+  return e('div', { style: card() },
+    e('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 } }, label),
+    value == null
+      ? e('div', { style: { fontSize: 34, fontWeight: 700, color: '#475569' } }, '—')
+      : e('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8 } },
+          e('span', { style: { fontSize: 36, fontWeight: 700, color: ok ? C.green : C.red } }, value.toFixed(2)),
+          e('span', { style: { fontSize: 15, color: C.muted } }, '분'),
+          e('span', {
+            style: {
+              fontSize: 11, fontWeight: 700, padding: '2px 10px', borderRadius: 99,
+              background: ok ? C.greenBg : C.redBg, color: ok ? C.green : C.red, marginLeft: 4,
+            }
+          }, ok ? 'PASS' : 'FAIL')
+        ),
+    e('div', { style: { fontSize: 12, color: C.muted, marginTop: 6 } }, `목표: < ${target}분`)
+  );
+}
+
+/* ── 서버 상태 카드 ── */
+function HealthCard({ health, error }) {
+  const ok = health?.status === '정상';
+  const dotColor = error ? C.red : ok ? C.green : C.muted;
+  return e('div', { style: card() },
+    e('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 } }, '서버 상태'),
+    e('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+      e('span', { style: { width: 10, height: 10, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 } }),
+      e('span', { style: { fontSize: 24, fontWeight: 700, color: dotColor } },
+        error ? '연결 실패' : health ? health.status : '연결 중…')
+    ),
+    health && e('div', { style: { fontSize: 12, color: C.muted, marginTop: 6 } },
+      `로드된 반응조: ${health.loaded_reactors?.join(', ') || '없음'}`)
+  );
+}
+
+/* ── 구간 테이블 ── */
+function StageTable({ stages }) {
+  if (!stages?.length) return null;
+  return e('div', { style: card({ marginBottom: 20 }) },
+    e('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 } }, '구간별 상세'),
+    e('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 14 } },
+      e('thead', null,
+        e('tr', null,
+          ['구간', '샘플 수', 'MAE'].map(h =>
+            e('th', { key: h, style: { textAlign: h === '구간' ? 'left' : 'right', padding: '6px 0', color: C.muted, fontWeight: 500, borderBottom: `1px solid ${C.border}` } }, h)
+          )
+        )
+      ),
+      e('tbody', null,
+        stages.map(st =>
+          e('tr', { key: st.label },
+            e('td', { style: { padding: '9px 0', color: C.text, borderBottom: `1px solid #1e293b` } }, st.label),
+            e('td', { style: { padding: '9px 0', color: C.subtle, textAlign: 'right', borderBottom: `1px solid #1e293b` } }, st.n.toLocaleString()),
+            e('td', { style: { padding: '9px 0', textAlign: 'right', fontWeight: 600, color: st.mae < 30 ? C.green : C.red, borderBottom: `1px solid #1e293b` } },
+              `${st.mae.toFixed(2)}분`)
+          )
+        )
+      )
+    )
+  );
+}
+
+/* ── 모델 정보 ── */
+function ModelCard({ model }) {
+  if (!model) return null;
+  const rows = [
+    ['통합 전환 기준', `경과 ${model.xgb_threshold_min}분`],
+    ['LSTM 윈도우',   `${model.window_size} 스텝 (${(model.window_size - 1) * 10}분)`],
+    ['LSTM Hidden',   `${model.hidden_size}`],
+    ['통합 전략',      model.integration],
+  ];
+  return e('div', { style: card({ marginBottom: 20 }) },
+    e('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 } }, '모델 구조'),
+    rows.map(([k, v]) =>
+      e('div', { key: k, style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid #1e293b`, fontSize: 13 } },
+        e('span', { style: { color: C.subtle } }, k),
+        e('span', { style: { color: C.text } }, v)
+      )
+    )
+  );
+}
+
+/* ── 실시간 예측 추이 차트 ── */
+function CycleLineChart({ history, reactor }) {
+  const canvasRef = useRef(null);
+  const chartRef  = useRef(null);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    chartRef.current = new Chart(canvasRef.current, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: '예측 종료 시점 (elapsed + T_signal)', data: [], borderColor: C.blue, backgroundColor: C.blue + '22', borderWidth: 2.5, pointRadius: 4, pointBackgroundColor: C.blue, tension: 0.3, fill: false },
+          { label: 'XGBoost 초기 예측 (cycle_runtime)',   data: [], borderColor: '#f59e0b', borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, tension: 0, fill: false },
+          { label: '실제 경과 시간',                       data: [], borderColor: C.green,   borderWidth: 1.5, borderDash: [3, 3], pointRadius: 0, tension: 0, fill: false },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {
+          legend: { labels: { color: C.subtle, font: { size: 12 }, boxWidth: 20, padding: 16 } },
+          tooltip: { backgroundColor: '#1e293b', borderColor: C.border, borderWidth: 1, titleColor: '#f1f5f9', bodyColor: C.subtle, callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y}분` } },
+        },
+        scales: {
+          x: { ticks: { color: C.subtle, font: { size: 11 } }, grid: { color: '#334155' }, title: { display: true, text: '경과 시간', color: C.muted, font: { size: 11 } } },
+          y: { ticks: { color: C.subtle, callback: v => v + '분' }, grid: { color: '#334155' }, title: { display: true, text: '시간 (분)', color: C.muted, font: { size: 11 } } },
+        },
+      },
+    });
+    return () => { chartRef.current?.destroy(); chartRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    if (!chartRef.current) return;
+    const log = history?.log ?? [];
+    const ch  = chartRef.current;
+    ch.data.labels           = log.map(p => p.elapsed_time + '분');
+    ch.data.datasets[0].data = log.map(p => p.predicted_end_time);
+    ch.data.datasets[1].data = log.map(p => p.xgb_prediction);
+    ch.data.datasets[2].data = log.map(p => p.elapsed_time);
+    ch.update('none');
+  }, [history]);
+
+  const log       = history?.log ?? [];
+  const lastEntry = log[log.length - 1];
+
+  return e('div', { style: card({ marginBottom: 20 }) },
+    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 } },
+      e('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1 } },
+        `실시간 예측 추이 — ${reactor}`),
+      lastEntry && e('div', { style: { display: 'flex', gap: 12, alignItems: 'center' } },
+        e('span', { style: { fontSize: 12, color: C.subtle } }, `경과: ${lastEntry.elapsed_time}분`),
+        e('span', { style: { fontSize: 11, padding: '2px 10px', borderRadius: 99, fontWeight: 600, background: lastEntry.mode === 'integrated' ? '#1e3a5f' : '#1a2e1a', color: lastEntry.mode === 'integrated' ? C.blue : C.green } },
+          lastEntry.mode === 'integrated' ? '통합 (XGB+LSTM)' : 'XGBoost 단독')
+      )
+    ),
+    e('div', { style: { position: 'relative', height: 240 } },
+      e('canvas', { ref: canvasRef }),
+      log.length === 0 && e('div', {
+        style: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 13, pointerEvents: 'none' }
+      }, '사이클 진행 중이 아닙니다. test_cycle.py 실행 시 실시간으로 표시됩니다.')
+    )
+  );
+}
+
+/* ── 메인 앱 ── */
+function App() {
+  const [health,    setHealth]    = useState(null);
+  const [metrics,   setMetrics]   = useState(null);
+  const [historyA,  setHistoryA]  = useState(null);
+  const [historyB,  setHistoryB]  = useState(null);
+  const [reactor,   setReactor]   = useState('반응조A');
+  const [error,     setError]     = useState(null);
+  const [loading,   setLoading]   = useState(false);
+  const [updatedAt, setUpdatedAt] = useState(null);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [hRes, mRes, hARes, hBRes] = await Promise.all([
+        fetch(`${API_BASE}/health`),
+        fetch(`${API_BASE}/metrics`),
+        fetch(`${API_BASE}/cycle/history/반응조A`),
+        fetch(`${API_BASE}/cycle/history/반응조B`),
+      ]);
+      if (!hRes.ok) throw new Error(`HTTP ${hRes.status}`);
+      setHealth(await hRes.json());
+      if (mRes.ok)  setMetrics(await mRes.json());
+      if (hARes.ok) setHistoryA(await hARes.json());
+      if (hBRes.ok) setHistoryB(await hBRes.json());
+      setUpdatedAt(new Date().toLocaleTimeString('ko-KR'));
+    } catch (err) {
+      setError(`서버 연결 실패 — ${err.message}. 서버가 실행 중인지 확인하세요 (localhost:8000)`);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  /* 30초마다 이력만 자동 폴링 */
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const [hARes, hBRes] = await Promise.all([
+          fetch(`${API_BASE}/cycle/history/반응조A`),
+          fetch(`${API_BASE}/cycle/history/반응조B`),
+        ]);
+        if (hARes.ok) setHistoryA(await hARes.json());
+        if (hBRes.ok) setHistoryB(await hBRes.json());
+        setUpdatedAt(new Date().toLocaleTimeString('ko-KR'));
+      } catch (_) {}
+    }, 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  const currentHistory = reactor === '반응조A' ? historyA : historyB;
+
+  return e('div', null,
+    /* 헤더 */
+    e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 } },
+      e('div', null,
+        e('h1', { style: { fontSize: 22, fontWeight: 700, color: '#f1f5f9' } }, '하수처리 폭기 제어 모니터링'),
+        e('p', { style: { fontSize: 13, color: C.muted, marginTop: 4 } },
+          updatedAt ? `마지막 업데이트: ${updatedAt} (30초마다 자동 갱신)` : 'XGBoost + LSTM 통합 모델 · 12월 테스트셋')
+      ),
+      e('button', {
+        onClick: fetchAll,
+        disabled: loading,
+        style: {
+          background: loading ? '#1e293b' : C.blue,
+          color: loading ? C.muted : '#fff',
+          border: 'none', borderRadius: 8,
+          padding: '9px 20px', fontSize: 13, fontWeight: 600, cursor: loading ? 'default' : 'pointer',
+        }
+      }, loading ? '로딩 중…' : '새로고침')
+    ),
+
+    /* 에러 배너 */
+    error && e('div', {
+      style: {
+        background: C.redBg, color: C.red, border: `1px solid #7f1d1d`,
+        borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 13,
+      }
+    }, error),
+
+    /* 상단 카드 3개 */
+    e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 20 } },
+      e(HealthCard, { health, error }),
+      e(MetricCard, { label: 'MAE (전체)', value: metrics?.overall?.mae ?? null, target: metrics?.targets?.mae ?? 30 }),
+      e(MetricCard, { label: 'RMSE (전체)', value: metrics?.overall?.rmse ?? null, target: metrics?.targets?.rmse ?? 45 }),
+    ),
+
+    /* 실시간 예측 추이 */
+    e('div', { style: { ...card({ marginBottom: 4 }), background: 'transparent', border: 'none', padding: '0 0 8px 0', display: 'flex', gap: 8 } },
+      ['반응조A', '반응조B'].map(r =>
+        e('button', {
+          key: r,
+          onClick: () => setReactor(r),
+          style: {
+            padding: '6px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none',
+            background: reactor === r ? C.blue : C.surface,
+            color: reactor === r ? '#fff' : C.subtle,
+          }
+        }, r)
+      )
+    ),
+    e(CycleLineChart, { history: currentHistory, reactor }),
+
+    /* 구간별 차트 + 테이블 + 모델 정보 */
+    metrics && e(StageBarChart, { stages: metrics.stages }),
+    metrics && e(StageTable,    { stages: metrics.stages }),
+    metrics && e(ModelCard,     { model:  metrics.model }),
+
+    !metrics && !error && !loading && e('div', {
+      style: { color: C.muted, textAlign: 'center', padding: 48, fontSize: 14, lineHeight: 2 }
+    }, '서버는 연결됐지만 메트릭 데이터가 없습니다.\n12월 검증 CSV 파일이 필요합니다.')
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(e(App));
+</script>
+</body>
+</html>
