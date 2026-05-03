@@ -1,8 +1,8 @@
-# 하수처리 폭기 제어 AI 시스템
+# 하수처리 포기기 제어 AI 시스템
 
-XGBoost + LSTM 통합 모델 기반 **최적 폭기 가동 시간(cycle_runtime)** 예측 시스템
+XGBoost + LSTM 통합 모델 기반 **최적 포기기 가동 시간(cycle_runtime)** 예측 시스템
 
-폭기기를 너무 일찍 끄면 수질 처리 불량, 너무 늦게 끄면 전력 낭비 — AI가 수질 센서 데이터를 보고 적절한 종료 시점을 실시간으로 알려줍니다.
+포기기를 너무 일찍 끄면 수질 처리 불량, 너무 늦게 끄면 전력 낭비 — AI가 수질 센서 데이터를 보고 적절한 종료 시점을 실시간으로 알려줍니다.
 
 ---
 
@@ -97,5 +97,5 @@ python test_cycle.py
 ```
 1. /cycle/start  호출 → "이번 사이클 140분 돌려" 응답
 2. 10분마다 /cycle/predict 호출 → T_signal 수신
-3. should_continue: false 수신 시 폭기 중단
+3. should_continue: false 수신 시 포기기 중단
 ```
