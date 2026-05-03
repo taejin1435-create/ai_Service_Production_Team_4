@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>하수처리 폭기 제어 모니터링</title>
+  <title>하수처리 포기기 가동 모니터링</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -312,7 +312,7 @@ function App() {
     /* 헤더 */
     e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 } },
       e('div', null,
-        e('h1', { style: { fontSize: 22, fontWeight: 700, color: '#f1f5f9' } }, '하수처리 폭기 제어 모니터링'),
+        e('h1', { style: { fontSize: 22, fontWeight: 700, color: '#f1f5f9' } }, '하수처리 포기기 가동 모니터링'),
         e('p', { style: { fontSize: 13, color: C.muted, marginTop: 4 } },
           updatedAt ? `마지막 업데이트: ${updatedAt} (30초마다 자동 갱신)` : 'XGBoost + LSTM 통합 모델 · 12월 테스트셋')
       ),
