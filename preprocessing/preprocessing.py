@@ -40,6 +40,14 @@ LSTM_FEATURES = [
 ]
 
 
+def _parse_datetime(series: pd.Series) -> pd.Series:
+    result = pd.to_datetime(series, format="%m월%d월%y %H:%M", errors="coerce")
+    mask = result.isna()
+    if mask.any():
+        result[mask] = pd.to_datetime(series[mask], errors="coerce")
+    return result
+
+
 def _read_csv_auto(path: Path, expected_header_col: str, fallback_cols: list[str]) -> pd.DataFrame:
     peek = pd.read_csv(path, encoding=ENCODING, nrows=0)
     has_header = expected_header_col in peek.columns
@@ -58,13 +66,14 @@ def load_and_merge(quality_path: Path, current_path: Path) -> pd.DataFrame:
 
     quality = quality[["계측기명", "수집시간", "nh4", "no3", "ph", "temp"]].copy()
     quality["계측기명"] = quality["계측기명"].str.replace(" ", "", regex=False)
+    quality["수집시간"] = _parse_datetime(quality["수집시간"])
 
     current = current[["계측기이름", "수집시간", "상전류(R)"]].copy()
     current["계측기명"] = current["계측기이름"].map(REACTOR_NAME_MAP)
     current = current.drop(columns=["계측기이름"])
+    current["수집시간"] = _parse_datetime(current["수집시간"])
 
     df = pd.merge(quality, current, on=["계측기명", "수집시간"], how="left")
-    df["수집시간"] = pd.to_datetime(df["수집시간"])
     df = df.sort_values(["계측기명", "수집시간"]).reset_index(drop=True)
     return df
 
@@ -219,5 +228,4 @@ if __name__ == "__main__":
     print_summary("LSTM 최종 데이터셋", lstm_df)
 
     print(f"\n저장 완료")
-    print(f"  XGB  → {XGB_OUTPUT_PATH}")
-    print(f"  LSTM → {LSTM_OUTPUT_PATH}")
+    pri

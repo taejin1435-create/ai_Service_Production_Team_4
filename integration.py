@@ -27,6 +27,10 @@ HIDDEN_SIZE           = 128
 NUM_LAYERS            = 2
 DROPOUT               = 0.3
 
+AERATOR_KW_PER_MIN = 958_862 * 0.55 / 365 / 1440   # 봉화읍 포기기 분당 전력 ≈ 1.003 kWh
+KRW_PER_KWH        = 110                             # 한국 산업용 전기료
+DECEMBER_DAYS      = 31
+
 XGB_FEATURES = [
     "nh4", "no3", "ph", "temp", "상전류(R)",
     "nh4_no3_ratio", "do_saturation",
@@ -152,6 +156,9 @@ def validate_on_december(predictor: AerationPredictor) -> dict:
 
     t_signals, t_trues, elapsed_vals = [], [], []
     n_xgb_only = n_integrated = n_clamped = 0
+    actual_total_min = 0.0
+    predicted_total_min = 0.0
+    n_cycles = 0
 
     for _, cycle in df_lstm.groupby("cycle_id"):
         start = cycle.iloc[0]
@@ -164,7 +171,12 @@ def validate_on_december(predictor: AerationPredictor) -> dict:
         if isinstance(xgb_row, pd.DataFrame):
             xgb_row = xgb_row.iloc[0]
 
+        actual_runtime = float(xgb_row.get("cycle_runtime", 0))
         predictor.on_cycle_start(xgb_row)
+        predicted_runtime = float(predictor._cycle_runtime_xgb)
+        actual_total_min    += actual_runtime
+        predicted_total_min += predicted_runtime
+        n_cycles += 1
 
         for _, row in cycle.iterrows():
             raw_elapsed = int(row["elapsed_time"])
@@ -232,7 +244,44 @@ def validate_on_december(predictor: AerationPredictor) -> dict:
             "n":     int(mask.sum()),
         })
 
-    return {"mae": mae, "rmse": rmse, "stages": stages}
+    mask_91        = elapsed_vals >= 91
+    stage_91_mae   = round(float(mean_absolute_error(t_trues[mask_91], t_signals[mask_91])), 2) if mask_91.sum() > 0 else 0
+    stage_91_rmse  = round(float(np.sqrt(mean_squared_error(t_trues[mask_91], t_signals[mask_91]))), 2) if mask_91.sum() > 0 else 0
+
+    saved_min_test = actual_total_min - predicted_total_min
+    annual_scale   = 365 / DECEMBER_DAYS
+    saved_kwh_year = saved_min_test * annual_scale * AERATOR_KW_PER_MIN
+    saved_krw_year = saved_kwh_year * KRW_PER_KWH
+
+    energy = {
+        "source":            "봉화읍 하수처리장 (경상북도 2023)",
+        "annual_total_kwh":  958_862,
+        "aerator_ratio":     0.55,
+        "kwh_per_min":       round(AERATOR_KW_PER_MIN, 4),
+        "krw_per_kwh":       KRW_PER_KWH,
+        "test_cycles":       n_cycles,
+        "actual_avg_min":    round(actual_total_min    / n_cycles, 1) if n_cycles else 0,
+        "predicted_avg_min": round(predicted_total_min / n_cycles, 1) if n_cycles else 0,
+        "saved_min_per_cycle": round(saved_min_test / n_cycles, 1) if n_cycles else 0,
+        "saved_kwh_annual":  round(saved_kwh_year),
+        "saved_krw_annual":  round(saved_krw_year),
+    }
+
+    print(f"\n=== 전력 절감 추정 (12월 → 연간 환산) ===")
+    print(f"  실제 평균 사이클 시간  : {energy['actual_avg_min']}분")
+    print(f"  AI 예측 평균 시간      : {energy['predicted_avg_min']}분")
+    print(f"  사이클당 평균 절감     : {energy['saved_min_per_cycle']}분")
+    print(f"  연간 절감 전력         : {energy['saved_kwh_annual']:,} kWh")
+    print(f"  연간 절감 전기료       : {energy['saved_krw_annual']:,} 원")
+
+    return {
+        "mae":           mae,
+        "rmse":          rmse,
+        "stage_91_mae":  stage_91_mae,
+        "stage_91_rmse": stage_91_rmse,
+        "stages":        stages,
+        "energy":        energy,
+    }
 
 
 def main() -> None:

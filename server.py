@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from integration import AerationPredictor, LSTM_WINDOW_THRESHOLD, validate_on_december
+from integration import AerationPredictor, LSTM_WINDOW_THRESHOLD, MIN_T_SIGNAL, validate_on_december
 
 warnings.filterwarnings("ignore")
 
@@ -190,8 +190,12 @@ async def get_metrics():
         "overall": {
             "mae":  round(_metrics_cache["mae"],  2),
             "rmse": round(_metrics_cache["rmse"], 2),
-            "mae_pass":  _metrics_cache["mae"]  < 30,
-            "rmse_pass": _metrics_cache["rmse"] < 45,
+        },
+        "integrated": {
+            "mae":       _metrics_cache.get("stage_91_mae",  0),
+            "rmse":      _metrics_cache.get("stage_91_rmse", 0),
+            "mae_pass":  _metrics_cache.get("stage_91_mae",  99) < 30,
+            "rmse_pass": _metrics_cache.get("stage_91_rmse", 99) < 45,
         },
         "targets": {"mae": 30, "rmse": 45},
         "stages": _metrics_cache.get("stages", []),
@@ -201,6 +205,7 @@ async def get_metrics():
             "hidden_size": 128,
             "integration": "max(xgb_remain, lstm_remain)",
         },
+        "energy": _metrics_cache.get("energy"),
     }
 
 
@@ -260,7 +265,7 @@ async def cycle_predict(req: PredictRequest):
     predictor  = predictors[req.reactor]
     lstm_row   = _to_lstm_series(req)
     t_signal   = predictor.predict(lstm_row, req.elapsed_time)
-    cont       = predictor.should_continue(req.elapsed_time)
+    cont       = t_signal > MIN_T_SIGNAL
     mode       = "xgb_only" if req.elapsed_time < LSTM_WINDOW_THRESHOLD else "integrated"
 
     return PredictResponse(

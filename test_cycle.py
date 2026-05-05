@@ -1,28 +1,50 @@
+import argparse
+import threading
 import time
-import requests
+
 import pandas as pd
+import requests
+import xgboost as xgb
 from pathlib import Path
-from integration import parse_datetime
+
+from integration import parse_datetime, XGB_FEATURES, LSTM_WINDOW_THRESHOLD
 
 API      = "http://localhost:8000"
-DATA_DIR = Path(__file__).parent / "data"
+BASE_DIR = Path(__file__).parent
+DATA_DIR = BASE_DIR / "data"
 ENCODING = "cp949"
 INTERVAL = 3
 
+_print_lock = threading.Lock()
 
-def load_longest_cycle():
+
+def safe_print(*args, **kwargs):
+    with _print_lock:
+        print(*args, **kwargs)
+
+
+def load_longest_cycle(reactor: str):
+    model = xgb.XGBRegressor()
+    model.load_model(str(BASE_DIR / "xgboost_model.json"))
+
     df_xgb = pd.read_csv(DATA_DIR / "봉화_12월_xgb.csv", encoding=ENCODING)
     df_xgb["수집시간"] = parse_datetime(df_xgb["수집시간"])
+    df_xgb = df_xgb[df_xgb["계측기명"] == reactor].copy().reset_index(drop=True)
 
     df_lstm = pd.read_csv(DATA_DIR / "봉화_12월_lstm.csv", encoding=ENCODING)
     df_lstm["수집시간"] = parse_datetime(df_lstm["수집시간"])
-    df_lstm = df_lstm[df_lstm["current_aeration"] == 1].copy().reset_index(drop=True)
+    df_lstm = df_lstm[
+        (df_lstm["current_aeration"] == 1) & (df_lstm["계측기명"] == reactor)
+    ].copy().reset_index(drop=True)
     df_lstm["cycle_id"] = (df_lstm["elapsed_time"] == 0).cumsum()
 
-    xgb_starts = df_xgb[df_xgb["elapsed_time"] == 0].set_index(["수집시간", "계측기명"])
+    starts = df_xgb[df_xgb["elapsed_time"] == 0].copy()
+    starts["xgb_pred"] = model.predict(starts[XGB_FEATURES]).astype(int)
+    valid_starts = starts[starts["xgb_pred"] >= LSTM_WINDOW_THRESHOLD]
+    xgb_starts   = valid_starts.set_index(["수집시간", "계측기명"])
 
     best_cycle, best_xgb_row = None, None
-    for cid, cycle in df_lstm.groupby("cycle_id"):
+    for _, cycle in df_lstm.groupby("cycle_id"):
         start_row = cycle.iloc[0]
         key = (start_row["수집시간"], start_row["계측기명"])
         if key not in xgb_starts.index:
@@ -33,11 +55,14 @@ def load_longest_cycle():
                 xgb_row = xgb_row.iloc[0]
             best_cycle, best_xgb_row = cycle, xgb_row
 
-    print(f"선택된 사이클: {len(best_cycle)}스텝 (최대 경과 {best_cycle['elapsed_time'].max()}분)")
+    if best_cycle is None:
+        raise RuntimeError(f"{reactor}: LSTM >= {LSTM_WINDOW_THRESHOLD}분 사이클 없음")
+
+    safe_print(f"[{reactor}] 선택 사이클: {len(best_cycle)}스텝 / 최대 경과 {best_cycle['elapsed_time'].max()}분 / XGB 예측 {best_xgb_row['xgb_pred']}분")
     return best_xgb_row, best_cycle
 
 
-def to_start_payload(row, reactor="반응조A"):
+def to_start_payload(row, reactor: str) -> dict:
     return {
         "reactor":          reactor,
         "nh4":              float(row["nh4"]),
@@ -58,7 +83,7 @@ def to_start_payload(row, reactor="반응조A"):
     }
 
 
-def to_predict_payload(row, reactor="반응조A"):
+def to_predict_payload(row, reactor: str) -> dict:
     return {
         "reactor":          reactor,
         "elapsed_time":     int(row["elapsed_time"]),
@@ -80,38 +105,73 @@ def to_predict_payload(row, reactor="반응조A"):
     }
 
 
-def main():
-    print("데이터 로드 중...")
-    xgb_row, cycle = load_longest_cycle()
-    reactor = "반응조A"
+def run_simulation(reactor: str, interval: int) -> None:
+    xgb_row, cycle = load_longest_cycle(reactor)
 
-    print(f"\n[1] /cycle/start 호출 → {reactor}")
     resp = requests.post(f"{API}/cycle/start", json=to_start_payload(xgb_row, reactor))
     resp.raise_for_status()
-    result = resp.json()
-    print(f"    XGBoost 예측 총 가동 시간: {result['cycle_runtime_xgb']}분\n")
+    xgb_runtime = resp.json()["cycle_runtime_xgb"]
+    safe_print(f"[{reactor}] /cycle/start → XGBoost 예측: {xgb_runtime}분")
 
-    print(f"[2] /cycle/predict 순차 호출 ({INTERVAL}초 간격, 실제 10분 시뮬레이션)")
-    print(f"    대시보드(dashboard.html) 열고 새로고침하면 그래프가 채워집니다.\n")
-    print(f"    {'경과':>6}  {'T_signal':>8}  {'예측종료':>8}  {'모드'}")
-    print(f"    {'-'*45}")
+    safe_print(f"[{reactor}] {'경과':>6}  {'T_signal':>8}  {'예측종료':>8}  {'모드'}")
+    safe_print(f"[{reactor}] {'-'*45}")
 
     for _, row in cycle.iterrows():
-        payload = to_predict_payload(row, reactor)
-        resp    = requests.post(f"{API}/cycle/predict", json=payload)
+        resp = requests.post(f"{API}/cycle/predict", json=to_predict_payload(row, reactor))
         resp.raise_for_status()
         r = resp.json()
 
         predicted_end = r["elapsed_time"] + r["t_signal"]
-        print(f"    {r['elapsed_time']:>5}분  {r['t_signal']:>7}분  {predicted_end:>7}분  {r['mode']}")
+        safe_print(f"[{reactor}] {r['elapsed_time']:>5}분  {r['t_signal']:>7}분  {predicted_end:>7}분  {r['mode']}")
 
         if not r["should_continue"]:
-            print("\n    → should_continue: false → 폭기 중단 신호")
+            safe_print(f"[{reactor}] → should_continue: false → 폭기 중단")
             break
 
-        time.sleep(INTERVAL)
+        time.sleep(interval)
 
-    print("\n완료. 대시보드에서 최종 그래프를 확인하세요.")
+    safe_print(f"[{reactor}] 완료.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="하수처리 포기기 사이클 시뮬레이션")
+    parser.add_argument(
+        "--reactor",
+        choices=["A", "B", "both"],
+        default="A",
+        help="시뮬레이션 대상 반응조 (기본값: A)",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=INTERVAL,
+        help=f"스텝 간 대기 시간 초 (기본값: {INTERVAL})",
+    )
+    args = parser.parse_args()
+
+    reactor_map = {
+        "A":    ["반응조A"],
+        "B":    ["반응조B"],
+        "both": ["반응조A", "반응조B"],
+    }
+    targets = reactor_map[args.reactor]
+
+    print(f"시뮬레이션 시작 — {', '.join(targets)} / 스텝 간격: {args.interval}초")
+    print("대시보드(dashboard.html)를 열고 새로고침하면 실시간 그래프가 채워집니다.\n")
+
+    if len(targets) == 1:
+        run_simulation(targets[0], args.interval)
+    else:
+        threads = [
+            threading.Thread(target=run_simulation, args=(r, args.interval), daemon=True)
+            for r in targets
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    print("\n전체 완료. 대시보드에서 A/B 탭을 전환해 결과를 확인하세요.")
 
 
 if __name__ == "__main__":

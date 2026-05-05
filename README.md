@@ -12,7 +12,7 @@ XGBoost + LSTM 통합 모델 기반 **최적 포기기 가동 시간(cycle_runti
 사이클 시작 → XGBoost: 수질 상태 보고 총 가동 시간 예측
 10분마다    → LSTM:     실시간 수질 변화 보고 잔여 시간 보정
 경과 80분+  → 두 모델 통합: max(XGBoost 잔여, LSTM 예측) 채택
-T_signal=0  → 포기기 중단
+T_signal ≤ 10분 → 포기기 중단
 ```
 
 ---
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 ### 1. API 서버 시작
 
 ```bash
-python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
+py -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### 2. 모니터링 대시보드
@@ -39,11 +39,16 @@ python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
 
 ### 3. 시뮬레이션 테스트 (선택)
 
-12월 테스트 데이터로 사이클 1개를 시뮬레이션합니다.
+12월 테스트 데이터에서 XGBoost 예측 기준 가장 긴 사이클을 선택해 시뮬레이션합니다.
 
 ```bash
-python test_cycle.py
+py test_cycle.py                        # 반응조A 단독 (기본값)
+py test_cycle.py --reactor B            # 반응조B 단독
+py test_cycle.py --reactor both         # A+B 병렬 동시 실행
+py test_cycle.py --reactor both --interval 1  # 빠른 시뮬레이션 (1초 간격)
 ```
+
+`both` 모드 실행 시 두 반응조가 threading으로 동시에 시뮬레이션되며, 대시보드에서 A/B 탭 전환으로 각 예측 추이를 확인할 수 있습니다.
 
 ---
 
@@ -54,7 +59,7 @@ python test_cycle.py
 | POST | `/cycle/start` | 사이클 시작 — XGBoost가 총 가동 시간 예측 |
 | POST | `/cycle/predict` | 10분마다 호출 — 잔여 시간 신호(T_signal) 수신 |
 | GET | `/cycle/history/{reactor}` | 현재 사이클 예측 이력 |
-| GET | `/metrics` | 모델 성능 지표 (MAE, RMSE) |
+| GET | `/metrics` | 모델 성능 지표 + 전력 절감 추정 |
 | GET | `/health` | 서버 상태 확인 |
 
 전체 API 문서: `http://localhost:8000/docs`
@@ -92,10 +97,24 @@ python test_cycle.py
 
 ---
 
+## 전력 절감 추정
+
+봉화읍 하수처리장 연간 전력 사용량(958,862 kWh) 기준, 포기기 비중 55% 적용
+
+| 항목 | 값 |
+|------|-----|
+| 사이클당 평균 절감 | 8.2분 |
+| 연간 절감 전력 | 62,118 kWh |
+| 연간 절감 전기료 | 6,832,944원 |
+
+> 기존 운전 데이터 대비 AI 예측 시간 차이 기준 추정치
+
+---
+
 ## 사용 흐름
 
 ```
-1. /cycle/start  호출 → "이번 사이클 140분 돌려" 응답
+1. /cycle/start  호출 → XGBoost가 총 가동 시간 예측
 2. 10분마다 /cycle/predict 호출 → T_signal 수신
-3. should_continue: false 수신 시 포기기 중단
+3. T_signal ≤ 10분 수신 시 포기기 중단
 ```

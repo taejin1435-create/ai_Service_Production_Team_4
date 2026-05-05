@@ -169,6 +169,53 @@ function StageTable({ stages }) {
   );
 }
 
+/* ── 전력 절감 카드 ── */
+function EnergySavingsCard({ energy }) {
+  if (!energy) return null;
+  const hasSavings = energy.saved_kwh_annual > 0;
+  const accentColor = hasSavings ? C.green : C.red;
+  const rows = [
+    ['데이터 출처',       energy.source],
+    ['연간 총 전력',      `${energy.annual_total_kwh.toLocaleString()} kWh`],
+    ['포기기 전력 비중',  `${(energy.aerator_ratio * 100).toFixed(0)}%`],
+    ['분당 포기기 전력',  `${energy.kwh_per_min} kWh/분`],
+    ['테스트 사이클 수',  `${energy.test_cycles.toLocaleString()}개`],
+    ['실제 평균 가동 시간', `${energy.actual_avg_min}분`],
+    ['AI 예측 평균 시간',  `${energy.predicted_avg_min}분`],
+  ];
+  return e('div', { style: card({ marginBottom: 20 }) },
+    e('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 16 } }, '전력 절감 추정 (연간)'),
+    e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 } },
+      e('div', { style: { background: '#0f172a', borderRadius: 10, padding: '14px 18px' } },
+        e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 6 } }, '연간 절감 전력'),
+        e('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
+          e('span', { style: { fontSize: 28, fontWeight: 700, color: accentColor } },
+            Math.abs(energy.saved_kwh_annual).toLocaleString()),
+          e('span', { style: { fontSize: 13, color: C.muted } }, 'kWh')
+        ),
+        e('div', { style: { fontSize: 11, color: C.muted, marginTop: 4 } },
+          `사이클당 ${energy.saved_min_per_cycle}분 단축`)
+      ),
+      e('div', { style: { background: '#0f172a', borderRadius: 10, padding: '14px 18px' } },
+        e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 6 } }, '연간 절감 전기료'),
+        e('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
+          e('span', { style: { fontSize: 28, fontWeight: 700, color: accentColor } },
+            Math.abs(energy.saved_krw_annual).toLocaleString()),
+          e('span', { style: { fontSize: 13, color: C.muted } }, '원')
+        ),
+        e('div', { style: { fontSize: 11, color: C.muted, marginTop: 4 } },
+          `${energy.krw_per_kwh}원/kWh 기준`)
+      )
+    ),
+    rows.map(([k, v]) =>
+      e('div', { key: k, style: { display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px solid #1e293b`, fontSize: 13 } },
+        e('span', { style: { color: C.subtle } }, k),
+        e('span', { style: { color: C.text } }, v)
+      )
+    )
+  );
+}
+
 /* ── 모델 정보 ── */
 function ModelCard({ model }) {
   if (!model) return null;
@@ -203,7 +250,6 @@ function CycleLineChart({ history, reactor }) {
         datasets: [
           { label: '예측 종료 시점 (elapsed + T_signal)', data: [], borderColor: C.blue, backgroundColor: C.blue + '22', borderWidth: 2.5, pointRadius: 4, pointBackgroundColor: C.blue, tension: 0.3, fill: false },
           { label: 'XGBoost 초기 예측 (cycle_runtime)',   data: [], borderColor: '#f59e0b', borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0, tension: 0, fill: false },
-          { label: '실제 경과 시간',                       data: [], borderColor: C.green,   borderWidth: 1.5, borderDash: [3, 3], pointRadius: 0, tension: 0, fill: false },
         ],
       },
       options: {
@@ -228,7 +274,6 @@ function CycleLineChart({ history, reactor }) {
     ch.data.labels           = log.map(p => p.elapsed_time + '분');
     ch.data.datasets[0].data = log.map(p => p.predicted_end_time);
     ch.data.datasets[1].data = log.map(p => p.xgb_prediction);
-    ch.data.datasets[2].data = log.map(p => p.elapsed_time);
     ch.update('none');
   }, [history]);
 
@@ -339,8 +384,8 @@ function App() {
     /* 상단 카드 3개 */
     e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 20 } },
       e(HealthCard, { health, error }),
-      e(MetricCard, { label: 'MAE (전체)', value: metrics?.overall?.mae ?? null, target: metrics?.targets?.mae ?? 30 }),
-      e(MetricCard, { label: 'RMSE (전체)', value: metrics?.overall?.rmse ?? null, target: metrics?.targets?.rmse ?? 45 }),
+      e(MetricCard, { label: 'MAE (종료 판단 구간)', value: metrics?.integrated?.mae ?? null, target: metrics?.targets?.mae ?? 30 }),
+      e(MetricCard, { label: 'RMSE (종료 판단 구간)', value: metrics?.integrated?.rmse ?? null, target: metrics?.targets?.rmse ?? 45 }),
     ),
 
     /* 실시간 예측 추이 */
@@ -359,10 +404,11 @@ function App() {
     ),
     e(CycleLineChart, { history: currentHistory, reactor }),
 
-    /* 구간별 차트 + 테이블 + 모델 정보 */
-    metrics && e(StageBarChart, { stages: metrics.stages }),
-    metrics && e(StageTable,    { stages: metrics.stages }),
-    metrics && e(ModelCard,     { model:  metrics.model }),
+    /* 구간별 차트 + 테이블 + 전력 절감 + 모델 정보 */
+    metrics && e(StageBarChart,       { stages:  metrics.stages }),
+    metrics && e(StageTable,          { stages:  metrics.stages }),
+    metrics && e(EnergySavingsCard,   { energy:  metrics.energy }),
+    metrics && e(ModelCard,           { model:   metrics.model }),
 
     !metrics && !error && !loading && e('div', {
       style: { color: C.muted, textAlign: 'center', padding: 48, fontSize: 14, lineHeight: 2 }
