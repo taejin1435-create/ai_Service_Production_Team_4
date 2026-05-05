@@ -265,7 +265,7 @@ async def cycle_predict(req: PredictRequest):
     predictor  = predictors[req.reactor]
     lstm_row   = _to_lstm_series(req)
     t_signal   = predictor.predict(lstm_row, req.elapsed_time)
-    cont       = t_signal > MIN_T_SIGNAL
+    cont       = predictor.should_continue(t_signal)
     mode       = "xgb_only" if req.elapsed_time < LSTM_WINDOW_THRESHOLD else "integrated"
 
     return PredictResponse(
