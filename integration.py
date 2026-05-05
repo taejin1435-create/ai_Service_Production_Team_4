@@ -130,15 +130,14 @@ class AerationPredictor:
         })
         return t_signal
 
+    def should_continue(self, t_signal: int) -> bool:
+        return t_signal > MIN_T_SIGNAL
+
     def get_history(self) -> dict:
         return {
             "cycle_runtime_xgb": self._cycle_runtime_xgb,
             "log": list(self._log),
         }
-
-    def should_continue(self, raw_elapsed: int) -> bool:
-        return (self._cycle_runtime_xgb - raw_elapsed) > 0
-
 
 def validate_on_december(predictor: AerationPredictor) -> dict:
     df_xgb = pd.read_csv(DATA_DIR / "봉화_12월_xgb.csv", encoding=ENCODING)
