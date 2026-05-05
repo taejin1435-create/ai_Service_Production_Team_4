@@ -18,7 +18,7 @@ MODEL_PATH  = BASE_DIR / "lstm_model.pt"
 SCALER_PATH = BASE_DIR / "lstm_scaler.pkl"
 ENCODING    = "cp949"
 
-TRAIN_MONTHS  = [6, 7, 8, 9, 10, 11]
+TRAIN_MONTHS  = [7, 8, 9, 10, 11]
 TEST_MONTHS   = [12]
 WINDOW_SIZE   = 9
 BATCH_SIZE    = 64
