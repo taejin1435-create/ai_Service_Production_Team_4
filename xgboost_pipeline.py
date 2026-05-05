@@ -15,7 +15,6 @@ DATA_DIR   = BASE_DIR / "data"
 MODEL_PATH = BASE_DIR / "xgboost_model.json"
 ENCODING = "cp949"
 MONTHS = [8, 9, 10, 12]
-DATE_FORMAT = "%m월%d일%y %H:%M"
 TRAIN_END = pd.Timestamp("2020-12-01")
 
 FEATURES = [
