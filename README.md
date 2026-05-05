@@ -50,6 +50,18 @@ py test_cycle.py --reactor both --interval 1  # 빠른 시뮬레이션 (1초 간
 
 `both` 모드 실행 시 두 반응조가 threading으로 동시에 시뮬레이션되며, 대시보드에서 A/B 탭 전환으로 각 예측 추이를 확인할 수 있습니다.
 
+### 4. 춘양 교차 검증
+
+봉화 학습 모델을 미학습 처리장(춘양)에 적용해 일반화 성능을 검증합니다.
+
+```bash
+# 1단계: 춘양 원본 데이터 전처리
+py preprocessing/preprocess_chunyang.py
+
+# 2단계: 봉화 vs 춘양 교차 검증 실행
+py validate_chunyang.py
+```
+
 ---
 
 ## API 엔드포인트
@@ -69,23 +81,33 @@ py test_cycle.py --reactor both --interval 1  # 빠른 시뮬레이션 (1초 간
 ## 파일 구조
 
 ```
-├── data/                       # 전처리된 학습/테스트 데이터
+├── data/                           # 전처리된 학습/테스트 데이터
+│   ├── 봉화_*월_xgb.csv            # 봉화 XGBoost 피처 (6~12월)
+│   ├── 봉화_*월_lstm.csv           # 봉화 LSTM 피처 (6~12월)
+│   ├── 춘양_*월_xgb.csv            # 춘양 XGBoost 피처 (6~12월)
+│   ├── 춘양_*월_lstm.csv           # 춘양 LSTM 피처 (6~12월)
+│   └── reference/
+│       └── 경상북도_공공하수처리시설_현황.xlsx  # 봉화·춘양 처리장 기본 현황 참고자료
 ├── preprocessing/
-│   └── preprocessing.py        # 원본 CSV 전처리 스크립트
-├── xgboost_pipeline.py         # XGBoost 학습
-├── lstm_pipeline.py            # LSTM 학습
-├── integration.py              # 두 모델 통합 + 검증
-├── server.py                   # FastAPI 서버
-├── dashboard.html              # 모니터링 대시보드
-├── test_cycle.py               # 시뮬레이션 테스트
-├── xgboost_model.json          # 학습된 XGBoost 모델
-├── lstm_model.pt               # 학습된 LSTM 모델
-└── lstm_scaler.pkl             # LSTM 피처 스케일러
+│   ├── preprocessing.py            # 봉화 원본 CSV 전처리
+│   └── preprocess_chunyang.py      # 춘양 원본 CSV 전처리
+├── xgboost_pipeline.py             # XGBoost 학습
+├── lstm_pipeline.py                # LSTM 학습
+├── integration.py                  # 두 모델 통합 + 봉화 검증
+├── validate_chunyang.py            # 춘양 교차 처리장 검증
+├── server.py                       # FastAPI 서버
+├── dashboard.html                  # 모니터링 대시보드
+├── test_cycle.py                   # 시뮬레이션 테스트
+├── xgboost_model.json              # 학습된 XGBoost 모델
+├── lstm_model.pt                   # 학습된 LSTM 모델
+└── lstm_scaler.pkl                 # LSTM 피처 스케일러
 ```
 
 ---
 
 ## 모델 성능 (12월 테스트셋)
+
+### 봉화 (학습 처리장)
 
 | 구간 | MAE | 비고 |
 |------|-----|------|
@@ -93,7 +115,12 @@ py test_cycle.py --reactor both --interval 1  # 빠른 시뮬레이션 (1초 간
 | 31~90분 | 55.15분 | 전환 구간 |
 | 91분+ | 23.61분 | XGBoost + LSTM 통합 ✅ |
 
-가동 종료 판단이 이루어지는 후반 구간(91분+)에서 MAE 23.61분 달성
+가동 종료 판단이 이루어지는 후반 구간(91분+)에서 MAE 23.61분 달성 (목표: <30분)
+
+### 춘양 교차 검증 (미학습 처리장)
+
+봉화에서 학습한 모델을 별도 전처리 없이 춘양 데이터에 직접 적용해 일반화 성능을 확인합니다.
+결과는 `py validate_chunyang.py` 실행 후 콘솔 출력으로 확인할 수 있습니다.
 
 ---
 
@@ -108,13 +135,3 @@ py test_cycle.py --reactor both --interval 1  # 빠른 시뮬레이션 (1초 간
 | 연간 절감 전기료 | 6,832,944원 |
 
 > 기존 운전 데이터 대비 AI 예측 시간 차이 기준 추정치
-
----
-
-## 사용 흐름
-
-```
-1. /cycle/start  호출 → XGBoost가 총 가동 시간 예측
-2. 10분마다 /cycle/predict 호출 → T_signal 수신
-3. T_signal ≤ 10분 수신 시 포기기 중단
-```
