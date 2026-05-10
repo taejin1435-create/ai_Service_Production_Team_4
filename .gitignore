@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
-old_data/
+old_data/data/
+models/
+.DS_Store
+발표대본_4조.docx
