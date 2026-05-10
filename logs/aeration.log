@@ -1,0 +1,73 @@
+2026-05-10 14:51:20,793 [WARNING] DB_HOST 미설정 — DB 저장 비활성화
+2026-05-10 14:51:20,840 [INFO] 모델 로드 완료 (반응조A, 반응조B)
+2026-05-10 14:51:20,864 [WARNING] 검증 데이터 없음 (메트릭 비활성화): [Errno 2] No such file or directory: '/Users/jun/Documents/ai_Service_Production_Team_4/data/봉화_12월_xgb.csv'
+2026-05-10 14:54:36,831 [INFO] [START] reactor=반응조A runtime=181 cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:54:36,836 [INFO] [PREDICT] reactor=반응조A elapsed=0 t_signal=181 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:54:39,852 [INFO] [PREDICT] reactor=반응조A elapsed=10 t_signal=171 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:54:42,860 [INFO] [PREDICT] reactor=반응조A elapsed=20 t_signal=161 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:54:45,872 [INFO] [PREDICT] reactor=반응조A elapsed=30 t_signal=151 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:54:48,890 [INFO] [PREDICT] reactor=반응조A elapsed=40 t_signal=141 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:54:51,909 [INFO] [PREDICT] reactor=반응조A elapsed=50 t_signal=131 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:54:54,942 [INFO] [PREDICT] reactor=반응조A elapsed=60 t_signal=121 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:54:57,953 [INFO] [PREDICT] reactor=반응조A elapsed=70 t_signal=111 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:55:00,969 [INFO] [PREDICT] reactor=반응조A elapsed=80 t_signal=101 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:55:03,985 [INFO] [PREDICT] reactor=반응조A elapsed=90 t_signal=91 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:55:07,002 [INFO] [PREDICT] reactor=반응조A elapsed=100 t_signal=82 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:55:10,019 [INFO] [PREDICT] reactor=반응조A elapsed=110 t_signal=85 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:55:13,030 [INFO] [PREDICT] reactor=반응조A elapsed=120 t_signal=86 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:55:16,038 [INFO] [PREDICT] reactor=반응조A elapsed=130 t_signal=86 clamped=False continue=True cycle_id=7a488327-f62c-4c3d-95cf-2e5ab3a3aa87
+2026-05-10 14:56:43,551 [INFO] [START] reactor=반응조A runtime=181 cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:43,555 [INFO] [PREDICT] reactor=반응조A elapsed=0 t_signal=181 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:44,070 [INFO] [PREDICT] reactor=반응조A elapsed=10 t_signal=171 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:44,582 [INFO] [PREDICT] reactor=반응조A elapsed=20 t_signal=161 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:45,096 [INFO] [PREDICT] reactor=반응조A elapsed=30 t_signal=151 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:45,613 [INFO] [PREDICT] reactor=반응조A elapsed=40 t_signal=141 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:46,131 [INFO] [PREDICT] reactor=반응조A elapsed=50 t_signal=131 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:46,651 [INFO] [PREDICT] reactor=반응조A elapsed=60 t_signal=121 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:47,171 [INFO] [PREDICT] reactor=반응조A elapsed=70 t_signal=111 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:47,687 [INFO] [PREDICT] reactor=반응조A elapsed=80 t_signal=101 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:48,195 [INFO] [PREDICT] reactor=반응조A elapsed=90 t_signal=91 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:48,714 [INFO] [PREDICT] reactor=반응조A elapsed=100 t_signal=82 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:49,233 [INFO] [PREDICT] reactor=반응조A elapsed=110 t_signal=85 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:49,749 [INFO] [PREDICT] reactor=반응조A elapsed=120 t_signal=86 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:56:50,268 [INFO] [PREDICT] reactor=반응조A elapsed=130 t_signal=86 clamped=False continue=True cycle_id=5649f2dc-7528-4d87-ae86-aad1e784c255
+2026-05-10 14:57:50,422 [INFO] [START] reactor=반응조A runtime=181 cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:50,425 [INFO] [PREDICT] reactor=반응조A elapsed=0 t_signal=181 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:50,939 [INFO] [PREDICT] reactor=반응조A elapsed=10 t_signal=171 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:51,449 [INFO] [PREDICT] reactor=반응조A elapsed=20 t_signal=161 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:51,964 [INFO] [PREDICT] reactor=반응조A elapsed=30 t_signal=151 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:52,480 [INFO] [PREDICT] reactor=반응조A elapsed=40 t_signal=141 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:52,997 [INFO] [PREDICT] reactor=반응조A elapsed=50 t_signal=131 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:53,516 [INFO] [PREDICT] reactor=반응조A elapsed=60 t_signal=121 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:54,033 [INFO] [PREDICT] reactor=반응조A elapsed=70 t_signal=111 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:54,552 [INFO] [PREDICT] reactor=반응조A elapsed=80 t_signal=101 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:55,064 [INFO] [PREDICT] reactor=반응조A elapsed=90 t_signal=91 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:55,574 [INFO] [PREDICT] reactor=반응조A elapsed=100 t_signal=82 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:56,092 [INFO] [PREDICT] reactor=반응조A elapsed=110 t_signal=85 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:56,604 [INFO] [PREDICT] reactor=반응조A elapsed=120 t_signal=86 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:57:57,118 [INFO] [PREDICT] reactor=반응조A elapsed=130 t_signal=86 clamped=False continue=True cycle_id=074cac98-983f-42c3-b96b-b0782522e59f
+2026-05-10 14:58:27,400 [INFO] DB executor 종료
+2026-05-10 14:58:29,928 [WARNING] DB_HOST 미설정 — DB 저장 비활성화
+2026-05-10 14:58:29,960 [INFO] 모델 로드 완료 (반응조A, 반응조B)
+2026-05-10 14:58:53,119 [INFO] [START] reactor=반응조A runtime=181 cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:53,124 [INFO] [PREDICT] reactor=반응조A elapsed=0 t_signal=181 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:53,638 [INFO] [PREDICT] reactor=반응조A elapsed=10 t_signal=171 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:54,150 [INFO] [PREDICT] reactor=반응조A elapsed=20 t_signal=161 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:54,666 [INFO] [PREDICT] reactor=반응조A elapsed=30 t_signal=151 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:55,180 [INFO] [PREDICT] reactor=반응조A elapsed=40 t_signal=141 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:55,696 [INFO] [PREDICT] reactor=반응조A elapsed=50 t_signal=131 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:56,214 [INFO] [PREDICT] reactor=반응조A elapsed=60 t_signal=121 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:56,733 [INFO] [PREDICT] reactor=반응조A elapsed=70 t_signal=111 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:57,248 [INFO] [PREDICT] reactor=반응조A elapsed=80 t_signal=101 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:57,766 [INFO] [PREDICT] reactor=반응조A elapsed=90 t_signal=91 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:58,284 [INFO] [PREDICT] reactor=반응조A elapsed=100 t_signal=82 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:58,795 [INFO] [PREDICT] reactor=반응조A elapsed=110 t_signal=85 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:59,305 [INFO] [PREDICT] reactor=반응조A elapsed=120 t_signal=86 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:58:59,824 [INFO] [PREDICT] reactor=반응조A elapsed=130 t_signal=86 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:59:00,349 [INFO] [PREDICT] reactor=반응조A elapsed=140 t_signal=94 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:59:00,862 [INFO] [PREDICT] reactor=반응조A elapsed=150 t_signal=91 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:59:01,379 [INFO] [PREDICT] reactor=반응조A elapsed=160 t_signal=78 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:59:01,897 [INFO] [PREDICT] reactor=반응조A elapsed=170 t_signal=68 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:59:02,414 [INFO] [PREDICT] reactor=반응조A elapsed=180 t_signal=60 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:59:02,933 [INFO] [PREDICT] reactor=반응조A elapsed=190 t_signal=50 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780
+2026-05-10 14:59:03,451 [INFO] [PREDICT] reactor=반응조A elapsed=200 t_signal=33 clamped=False continue=True cycle_id=7dd92c1c-897a-44f3-84e2-28dd2abc2780

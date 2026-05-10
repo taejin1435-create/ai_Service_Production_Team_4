@@ -181,7 +181,7 @@ function EnergySavingsCard({ energy }) {
     ['분당 포기기 전력',  `${energy.kwh_per_min} kWh/분`],
     ['테스트 사이클 수',  `${energy.test_cycles.toLocaleString()}개`],
     ['실제 평균 가동 시간', `${energy.actual_avg_min}분`],
-    ['AI 예측 평균 시간',  `${energy.predicted_avg_min}분`],
+    ['AI 예측 평균 시간',  `${energy.sim_stop_avg_min}분`],
   ];
   return e('div', { style: card({ marginBottom: 20 }) },
     e('div', { style: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 16 } }, '전력 절감 추정 (연간)'),
@@ -194,7 +194,7 @@ function EnergySavingsCard({ energy }) {
           e('span', { style: { fontSize: 13, color: C.muted } }, 'kWh')
         ),
         e('div', { style: { fontSize: 11, color: C.muted, marginTop: 4 } },
-          `사이클당 ${energy.saved_min_per_cycle}분 단축`)
+          `사이클당 ${energy.avg_time_saved}분 단축`)
       ),
       e('div', { style: { background: '#0f172a', borderRadius: 10, padding: '14px 18px' } },
         e('div', { style: { fontSize: 11, color: C.muted, marginBottom: 6 } }, '연간 절감 전기료'),
