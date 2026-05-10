@@ -27,7 +27,7 @@ MONTHS = {
     "6월":  ("춘양_6월_수질계측기.csv",  "춘양_6월_온도전류.csv"),
 }
 
-TARGET_MONTH = "6월"
+TARGET_MONTH = "12월"
 
 
 def preprocess_month(month: str) -> tuple:
