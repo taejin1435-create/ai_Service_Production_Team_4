@@ -492,6 +492,63 @@ t_signal, _ = predictor.predict(row, raw_elapsed)
 - `t_signal, _ = predictor.predict(...)` 튜플 언패킹
 - `int(os.getenv("DB_PORT", "5432"))` 미설정 시 크래시 방지
 
+### #32 server.py 구조 정비 및 안전성 강화
+
+**네이밍 일관성**
+- `pool` → `_pool`, `init_db` → `_init_db`, `save_to_db` → `_save_to_db` (내부 함수 언더스코어 prefix 통일)
+
+**안전성**
+- `_save_to_db` 내부 `assert _pool is not None` 추가 — DB 비활성 상태에서 thread 진입 시 즉시 실패 보장
+- `_init_db`에 인덱스 추가: `CREATE INDEX IF NOT EXISTS idx_aeration_log_cycle_id ON aeration_log (cycle_id)` — cycle 단위 조회 성능 확보
+
+**타입 강화**
+- `cycle_id: str` → `cycle_id: UUID` (`CycleStartResponse`, `PredictRequest`)
+- `from uuid import uuid4` 직접 import, `uuid.uuid4()` → `uuid4()` 단순화
+- DB 저장 시 `str(req.cycle_id)` 명시 — UUID 객체 → TEXT 변환 보장
+
+**Pydantic 개선**
+- `field_validator` import 추가 (`pydantic`)
+- `elapsed_time` 검증 추가: 10분 단위 미준수 시 422 반환
+- `CycleStartRequest` / `PredictRequest` 주요 필드에 `ge` / `le` 범위 제약 추가 (nh4, no3, ph, temp, current_r, hour_sin, hour_cos, weekday)
+
+**데드코드 제거**
+- `import numpy as np` 제거 (미사용)
+- `predictor.current_cycle_id = cycle_id` 제거 (dead assignment)
+- 주석 처리된 `/train` 엔드포인트 블록 제거
+- `/cycle/predict` 설명문 `< 80분` 하드코딩 → `LSTM_WINDOW_THRESHOLD` 동적 참조
+
+### #34 DB 저장 안정성 및 `was_clamped` 컬럼 추가
+
+**Thread 남발 → ThreadPoolExecutor 교체**
+
+```python
+# 이전 — 요청마다 thread 생성
+threading.Thread(target=_task, daemon=True).start()
+
+# 이후 — 최대 4개 worker로 제한
+from concurrent.futures import ThreadPoolExecutor
+_db_executor = ThreadPoolExecutor(max_workers=4)
+_db_executor.submit(_task)
+```
+
+`/cycle/predict` 병렬 요청 증가 시 thread 폭증 방지. `threading` import 제거.
+
+**`was_clamped` DB 컬럼 추가**
+
+```sql
+was_clamped BOOLEAN
+```
+
+INSERT, 파라미터 튜플, `_save_to_db` 호출부 데이터 딕셔너리 전부 반영. clamping 빈도/시점/reactor별 clamp rate를 DB 쿼리로 분석 가능.
+
+**DB 풀 종료 로그**
+
+```python
+if _pool:
+    _pool.closeall()
+    logger.info("DB 연결 풀 종료")
+```
+
 ---
 
 ## `test_cycle.py`
@@ -521,6 +578,60 @@ UX / 디버깅:
 - `--interval` `type=int` → `type=float` (`--interval 0.5` 가능)
 - STOP 로그: `elapsed`, `predicted_end`, `mode`, `was_clamped` 포함
 - `load_longest_cycle()` 반환 타입 힌트 추가 `-> tuple[pd.Series, pd.DataFrame]`
+
+### #33 `_post()` 예외 처리 버그 수정 및 안정성 보강
+
+**`_post()` 예외 처리 구조 수정 (버그 수정)**
+
+```python
+# 이전 — session.post() 자체 실패 시 resp 미생성 → resp.text에서 NameError
+def _post(...) -> dict:
+    resp = session.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+    try:
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        safe_print(f"[HTTP ERROR] {e}\n{resp.text}")  # resp 없을 수 있음
+        raise
+    return resp.json()
+
+# 이후 — ConnectionError, Timeout, DNS 실패 모두 안전 처리
+def _post(...) -> dict:
+    try:
+        resp = session.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        body = e.response.text if hasattr(e, "response") and e.response is not None else ""
+        safe_print(f"[HTTP ERROR] {e}\n{body}")
+        raise
+```
+
+`session.post()` 자체가 실패하는 경우(ConnectionError, Timeout, DNS 실패)에는 `resp` 변수가 생성되지 않음. 기존 구조는 이 케이스에서 `resp.text` 참조 시 `UnboundLocalError` 발생.
+
+**`cycle_id` 빈값 검증**
+```python
+if not cycle_id:
+    raise RuntimeError(f"{reactor}: cycle_id 없음 — /cycle/start 응답 확인 필요")
+```
+
+**STOP 로그 강화**
+```python
+# 이전
+f"→ should_continue: false → 폭기 중단"
+
+# 이후
+f"→ STOP (elapsed={r['elapsed_time']}분, predicted_end={predicted_end}분, mode={r['mode']}, clamped={r['was_clamped']})"
+```
+
+XGB 단독 vs LSTM 통합 종료 구분, Safety Clamping 적용 여부를 STOP 시점에 즉시 확인 가능.
+
+**`predicted_end` 타입 명시**
+```python
+predicted_end = int(r["elapsed_time"]) + int(r["t_signal"])
+```
+
+**`from integration import parse_datetime` → `from utils import parse_datetime`**
+`parse_datetime`은 `utils.py`에 정의된 공용 함수. 올바른 import 경로로 수정.
 
 ---
 
