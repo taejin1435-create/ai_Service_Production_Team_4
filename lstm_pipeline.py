@@ -10,50 +10,38 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
+from features import LSTM_FEATURES as FEATURES, LSTM_TARGET as TARGET, LSTM_FORBIDDEN as FORBIDDEN
+from utils import parse_datetime, underprediction_rate, update_metadata
+
 warnings.filterwarnings("ignore")
+
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
 
 BASE_DIR    = Path(__file__).parent
 DATA_DIR    = BASE_DIR / "data"
-MODEL_PATH  = BASE_DIR / "lstm_model.pt"
-SCALER_PATH = BASE_DIR / "lstm_scaler.pkl"
+MODELS_DIR  = BASE_DIR / "models"
+MODEL_PATH  = MODELS_DIR / "lstm_model.pt"
+SCALER_PATH = MODELS_DIR / "lstm_scaler.pkl"
 ENCODING    = "cp949"
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-TRAIN_MONTHS  = [7, 8, 9, 10, 11]
+TRAIN_MONTHS  = [6, 7, 8, 9, 10, 11]
 TEST_MONTHS   = [12]
-WINDOW_SIZE   = 9
+WINDOW_SIZE   = 7
 BATCH_SIZE    = 64
 HIDDEN_SIZE   = 128
 NUM_LAYERS    = 2
 DROPOUT       = 0.3
 LEARNING_RATE = 1e-3
-MAX_EPOCHS    = 100
-PATIENCE      = 15
-HUBER_DELTA   = 5.0
+MAX_EPOCHS    = 150
+PATIENCE      = 20
+HUBER_DELTA   = 10.0
 SEPT_IMPUTE = {
-    "temp":         (23.87, 21.33),   # (8월 말 평균, 10월 초 평균)
+    "temp":         (23.87, 21.33),
     "do_saturation": (8.437, 8.843),
 }
-
-TARGET   = "T_remaining"
-FEATURES = [
-    "nh4",
-    "no3",
-    "ph",
-    "temp",
-    "상전류(R)",
-    "nh4_no3_ratio",
-    "do_saturation",
-    "nh4_diff",
-    "no3_diff",
-    "ph_diff",
-    "nh4_rolling_mean",
-    "nh4_decay_rate",
-    "hour_sin",
-    "hour_cos",
-    "weekday",
-    "elapsed_time",
-]
-FORBIDDEN = {"cycle_runtime", "current_aeration", "T_remaining"}
 
 
 def assert_pipeline_integrity(features: list[str]) -> None:
@@ -74,14 +62,6 @@ def impute_september(df: pd.DataFrame) -> pd.DataFrame:
     for col, (v_start, v_end) in SEPT_IMPUTE.items():
         df.loc[sept_mask, col] = v_start + (v_end - v_start) * t
     return df
-
-
-def parse_datetime(series: pd.Series) -> pd.Series:
-    result = pd.to_datetime(series, format="%m월%d월%y %H:%M", errors="coerce")
-    mask = result.isna()
-    if mask.any():
-        result[mask] = pd.to_datetime(series[mask], errors="coerce")
-    return result
 
 
 def load_lstm_data(months: list[int]) -> pd.DataFrame:
@@ -207,10 +187,11 @@ def evaluate(model: nn.Module, loader: DataLoader, label: str) -> dict:
             trues.extend(y_batch.numpy())
     preds = np.array(preds)
     trues = np.array(trues)
-    mae  = mean_absolute_error(trues, preds)
-    rmse = float(np.sqrt(mean_squared_error(trues, preds)))
-    print(f"[{label}] MAE: {mae:.2f}분 | RMSE: {rmse:.2f}분 | n={len(trues)}")
-    return {"mae": mae, "rmse": rmse, "preds": preds, "trues": trues}
+    mae   = mean_absolute_error(trues, preds)
+    rmse  = float(np.sqrt(mean_squared_error(trues, preds)))
+    under = underprediction_rate(preds, trues)
+    print(f"[{label}] MAE: {mae:.2f}분 | RMSE: {rmse:.2f}분 | 심각한 과소예측: {under*100:.1f}% | n={len(trues)}")
+    return {"mae": mae, "rmse": rmse, "underprediction_rate": under, "preds": preds, "trues": trues}
 
 
 def evaluate_by_stage(preds: np.ndarray, trues: np.ndarray, elapsed: np.ndarray) -> None:
@@ -267,6 +248,13 @@ def main() -> None:
     print(f"스케일러 저장: {SCALER_PATH}")
     print(f"목표 대비: MAE {'PASS' if result['mae'] < 30 else 'FAIL'} (<30분) | "
           f"RMSE {'PASS' if result['rmse'] < 45 else 'FAIL'} (<45분)")
+
+    update_metadata({
+        "metrics": {
+            "lstm_mae":  round(result["mae"],  2),
+            "lstm_rmse": round(result["rmse"], 2),
+        },
+    }, MODELS_DIR)
 
 
 if __name__ == "__main__":
