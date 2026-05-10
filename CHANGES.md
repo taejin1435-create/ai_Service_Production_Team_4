@@ -479,40 +479,29 @@ t_signal, _ = predictor.predict(row, raw_elapsed)
 | `weekday` | `ge=0, le=6` | 요일 인코딩 |
 | `elapsed_time` | `ge=0, le=480` | 사이클 길이 상한 |
 
-### #26 조원 버전 머지 — DB 저장 / logging / cycle_id
+### #26 DB 저장 / logging / cycle_id 추가
 
-조원 버전에서 가져온 것:
 - `logging` (파일 + 스트림 핸들러, `logs/aeration.log`)
 - `cycle_id` UUID 생성 및 추적 (`/cycle/start` 응답, `/cycle/predict` 요청 필드)
 - PostgreSQL DB 저장 (`psycopg2` + `SimpleConnectionPool` + daemon thread)
 - `load_dotenv` + 환경변수 기반 `DB_CONFIG`
-
-조원 버전 버그 수정:
-- `t_signal = predictor.predict(...)` → `t_signal, _ = predictor.predict(...)` (튜플 언패킹 누락)
-- `window_size: 9` → `WINDOW_SIZE` 상수 참조
-- `int(os.getenv("DB_PORT"))` → `int(os.getenv("DB_PORT", "5432"))` (미설정 시 크래시 방지)
-- `trainer` import 제거 (trainer.py 부재 시 서버 시작 불가)
-
-추가 개선:
 - `_DB_ENABLED` 플래그: `DB_HOST` 미설정 시 DB 없이 graceful 실행
 - API 설명문 하드코딩 "80분" → `LSTM_WINDOW_THRESHOLD` 상수 참조
 - `from integration import WINDOW_SIZE, HIDDEN_SIZE` (이중 관리 제거)
 - `/health` 응답에 `db_enabled` 필드 추가
+- `t_signal, _ = predictor.predict(...)` 튜플 언패킹
+- `int(os.getenv("DB_PORT", "5432"))` 미설정 시 크래시 방지
 
 ---
 
 ## `test_cycle.py`
 
-### #30 신규 파일 — 조원 버전 머지 및 전면 개선
+### #30 신규 파일 — 사이클 시뮬레이션 테스트
 
-조원 버전에서 가져온 것:
+주요 구현:
 - `cycle_id`를 `/cycle/start` 응답에서 추출해 `/cycle/predict` 요청에 전달
-- 시작 로그에 `cycle_id` 출력
-
-조원 버전 버그 수정:
-- 모델 경로: `BASE_DIR / "xgboost_model.json"` → `BASE_DIR / "models" / "xgboost_model.json"` (FileNotFoundError)
-- `resp.json()` 중복 호출 → `result` 변수 재사용
-- `to_predict_payload(row, reactor)` 누락 `cycle_id` 인자 수정
+- 모델 경로: `BASE_DIR / "models" / "xgboost_model.json"`
+- `resp.json()` → `result` 변수 재사용
 
 구조 개선:
 - `load_data()` 분리 — 모델/CSV `main()`에서 1회 로드. `both` 모드 XGBoost 2회 로드 제거
