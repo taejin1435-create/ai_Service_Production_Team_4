@@ -1,14 +1,19 @@
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from sklearn.preprocessing import LabelEncoder
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from utils import parse_datetime
 
 # ── 경로 설정 (이 부분만 수정하여 다른 달에 재사용) ──────────────────────────
 _BASE            = Path(__file__).parent.parent
-QUALITY_PATH     = _BASE / "old_data" / "7월" / "봉화_7월_수질계측기.csv"
-CURRENT_PATH     = _BASE / "old_data" / "7월" / "봉화_7월_온도진동전류.csv"
-XGB_OUTPUT_PATH  = _BASE / "data" / "봉화_7월_xgb.csv"
-LSTM_OUTPUT_PATH = _BASE / "data" / "봉화_7월_lstm.csv"
+QUALITY_PATH     = _BASE / "old_data" / "12월" / "봉화_12월_수질계측기.csv"
+CURRENT_PATH     = _BASE / "old_data" / "12월" / "봉화_12월_온도진동전류.csv"
+XGB_OUTPUT_PATH  = _BASE / "data" / "봉화_12월_xgb.csv"
+LSTM_OUTPUT_PATH = _BASE / "data" / "봉화_12월_lstm.csv"
 # ─────────────────────────────────────────────────────────────────────────────
 
 ENCODING = "cp949"
@@ -31,21 +36,7 @@ QUALITY_HEADER = ["계측기명", "수집시간", "nh4", "_unnamed", "no3", "ph"
 CURRENT_HEADER = ["계측기이름", "수집시간", "온도", "진동", "상전류(R)",
                   "상전류(S)", "상전류(T)", "상전압(R)", "상전압(S)", "상전압(T)"]
 
-LSTM_FORBIDDEN_FEATURES = {"T_remaining", "cycle_runtime"}
-LSTM_FEATURES = [
-    "nh4", "no3", "ph", "temp",
-    "nh4_diff", "no3_diff", "ph_diff",
-    "hour_sin", "hour_cos",
-    "elapsed_time", "nh4_decay_rate", "상전류(R)",
-]
-
-
-def _parse_datetime(series: pd.Series) -> pd.Series:
-    result = pd.to_datetime(series, format="%m월%d월%y %H:%M", errors="coerce")
-    mask = result.isna()
-    if mask.any():
-        result[mask] = pd.to_datetime(series[mask], errors="coerce")
-    return result
+from features import LSTM_FEATURES, LSTM_FORBIDDEN as LSTM_FORBIDDEN_FEATURES
 
 
 def _read_csv_auto(path: Path, expected_header_col: str, fallback_cols: list[str]) -> pd.DataFrame:
@@ -66,12 +57,12 @@ def load_and_merge(quality_path: Path, current_path: Path) -> pd.DataFrame:
 
     quality = quality[["계측기명", "수집시간", "nh4", "no3", "ph", "temp"]].copy()
     quality["계측기명"] = quality["계측기명"].str.replace(" ", "", regex=False)
-    quality["수집시간"] = _parse_datetime(quality["수집시간"])
+    quality["수집시간"] = parse_datetime(quality["수집시간"])
 
     current = current[["계측기이름", "수집시간", "상전류(R)"]].copy()
     current["계측기명"] = current["계측기이름"].map(REACTOR_NAME_MAP)
     current = current.drop(columns=["계측기이름"])
-    current["수집시간"] = _parse_datetime(current["수집시간"])
+    current["수집시간"] = parse_datetime(current["수집시간"])
 
     df = pd.merge(quality, current, on=["계측기명", "수집시간"], how="left")
     df = df.sort_values(["계측기명", "수집시간"]).reset_index(drop=True)
@@ -128,17 +119,19 @@ def add_derived_features(df: pd.DataFrame) -> pd.DataFrame:
     df["elapsed_time"]   = df.groupby(cycle_id).cumcount() * 10 * aeration
     df["T_remaining"]    = df["cycle_runtime"] - df["elapsed_time"]
 
-    df["nh4_diff"]       = df["nh4"].diff().fillna(0)
-    df["no3_diff"]       = df["no3"].diff().fillna(0)
-    df["ph_diff"]        = df["ph"].diff().fillna(0)
-    df["nh4_decay_rate"] = df["nh4_diff"] / 10
+    df["nh4_diff"]       = df.groupby(cycle_id)["nh4"].diff().fillna(0)
+    df["no3_diff"]       = df.groupby(cycle_id)["no3"].diff().fillna(0)
+    df["ph_diff"]        = df.groupby(cycle_id)["ph"].diff().fillna(0)
+    df["nh4_decay_rate"] = df.groupby(cycle_id)["nh4"].diff(3).fillna(0) / 30
 
     df["hour"]    = df["수집시간"].dt.hour
     df["weekday"] = df["수집시간"].dt.weekday
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
 
-    df["nh4_rolling_mean"] = df["nh4"].rolling(window=6, min_periods=1).mean()
+    df["nh4_rolling_mean"] = df.groupby(cycle_id)["nh4"].transform(
+        lambda x: x.rolling(window=6, min_periods=1).mean()
+    )
     df["nh4_no3_ratio"]    = df["nh4"] / (df["no3"] + 1e-6)
     df["do_saturation"]    = 468 / (31.6 + df["temp"])
 
@@ -228,4 +221,3 @@ if __name__ == "__main__":
     print_summary("LSTM 최종 데이터셋", lstm_df)
 
     print(f"\n저장 완료")
-    pri
