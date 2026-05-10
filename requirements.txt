@@ -7,5 +7,5 @@ pandas
 numpy
 requests
 shap
-psycopg2
+psycopg2-binary
 python-dotenv
