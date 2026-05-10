@@ -1,51 +1,47 @@
 import warnings
 from contextlib import asynccontextmanager
+from uuid import UUID, uuid4
 
-import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from integration import AerationPredictor, LSTM_WINDOW_THRESHOLD, MIN_T_SIGNAL, validate_on_december
+from integration import AerationPredictor, LSTM_WINDOW_THRESHOLD, WINDOW_SIZE, HIDDEN_SIZE, validate_on_december
 
-import uuid
 import os
 import logging
-import threading
-import json
-import time
-import psycopg2
-from psycopg2.pool import SimpleConnectionPool
-from trainer import trainer
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-load_dotenv()
-# 로그 폴더 생성
-os.makedirs("logs", exist_ok=True)
 
+load_dotenv()
+
+os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.FileHandler("logs/aeration.log"),
-        logging.StreamHandler()
+        logging.StreamHandler(),
     ]
 )
-
 logger = logging.getLogger("aeration_api")
 
+_DB_ENABLED = bool(os.getenv("DB_HOST"))
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
+    "host":     os.getenv("DB_HOST"),
     "database": os.getenv("DB_NAME"),
-    "user": os.getenv("DB_USER"),
+    "user":     os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
-    "port": int(os.getenv("DB_PORT"))
-}
+    "port":     int(os.getenv("DB_PORT", "5432")),
+} if _DB_ENABLED else {}
 
-pool: SimpleConnectionPool = None
+_pool        = None
+_db_executor = ThreadPoolExecutor(max_workers=4)
 
-# DB 초기화
-def init_db():
+
+def _init_db():
+    import psycopg2
     conn = psycopg2.connect(**DB_CONFIG)
     with conn.cursor() as cur:
         cur.execute("""
@@ -56,7 +52,6 @@ def init_db():
             cycle_id TEXT,
             reactor TEXT,
 
-            -- 🔹 원본 입력값
             nh4 REAL,
             no3 REAL,
             ph REAL,
@@ -79,25 +74,30 @@ def init_db():
 
             elapsed_time INTEGER,
 
-            -- 🔹 모델 결과
             t_signal INTEGER,
             should_continue BOOLEAN,
+            was_clamped BOOLEAN,
             mode TEXT,
 
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_aeration_log_cycle_id ON aeration_log (cycle_id)
+        """)
     conn.commit()
     conn.close()
 
-# DB 저장
-def save_to_db(data: dict):
+
+def _save_to_db(data: dict):
+    if not _DB_ENABLED:
+        return
+
     def _task():
+        assert _pool is not None
         conn = None
-
         try:
-            conn = pool.getconn()
-
+            conn = _pool.getconn()
             with conn.cursor() as cur:
                 cur.execute("""
                 INSERT INTO aeration_log (
@@ -112,7 +112,7 @@ def save_to_db(data: dict):
                     hour_sin, hour_cos, weekday,
                     elapsed_time,
 
-                    t_signal, should_continue, mode
+                    t_signal, should_continue, was_clamped, mode
                 ) VALUES (
                     %s,%s,%s,
                     %s,%s,%s,%s,%s,
@@ -121,7 +121,7 @@ def save_to_db(data: dict):
                     %s,%s,
                     %s,%s,%s,
                     %s,
-                    %s,%s,%s
+                    %s,%s,%s,%s
                 )
                 """, (
                     data["request_id"],
@@ -152,24 +152,20 @@ def save_to_db(data: dict):
 
                     data["t_signal"],
                     data["should_continue"],
+                    data["was_clamped"],
                     data["mode"]
                 ))
-
             conn.commit()
-
-            logger.info(
-                f"[DB 저장 완료] cycle={data['cycle_id']} t={data['t_signal']}"
-            )
-
-        except Exception as e:
-            logger.error(f"[DB 저장 실패] {str(e)}")
-
+            logger.info(f"[DB 저장 완료] cycle={data['cycle_id']} t={data['t_signal']}")
+        except Exception:
+            if conn:
+                conn.rollback()
+            logger.exception("[DB 저장 실패]")
         finally:
             if conn:
-                pool.putconn(conn)
+                _pool.putconn(conn)
 
-    threading.Thread(target=_task, daemon=True).start()
-
+    _db_executor.submit(_task)
 
 
 warnings.filterwarnings("ignore")
@@ -183,21 +179,34 @@ _metrics_cache: dict = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global pool
-    pool = SimpleConnectionPool(1, 10, **DB_CONFIG)
-    init_db()
+    global _pool
+    if _DB_ENABLED:
+        from psycopg2.pool import SimpleConnectionPool
+        _pool = SimpleConnectionPool(1, 10, **DB_CONFIG)
+        _init_db()
+        logger.info("DB 연결 풀 초기화 완료")
+    else:
+        logger.warning("DB_HOST 미설정 — DB 저장 비활성화")
+
     for reactor in VALID_REACTORS:
         predictors[reactor] = AerationPredictor()
-    print("모델 로드 완료 (반응조A, 반응조B)")
+    logger.info("모델 로드 완료 (반응조A, 반응조B)")
+
     try:
-        validation_predictor = AerationPredictor()
-        result = validate_on_december(validation_predictor)
+        result = validate_on_december(AerationPredictor())
         _metrics_cache.update(result)
     except Exception as e:
-        print(f"검증 데이터 없음 (메트릭 비활성화): {e}")
+        logger.warning(f"검증 데이터 없음 (메트릭 비활성화): {e}")
+
     yield
+
     predictors.clear()
     _metrics_cache.clear()
+    _db_executor.shutdown(wait=True)
+    logger.info("DB executor 종료")
+    if _pool:
+        _pool.closeall()
+        logger.info("DB 연결 풀 종료")
 
 
 app = FastAPI(
@@ -209,8 +218,8 @@ app = FastAPI(
         "2. 10분마다 `/cycle/predict` 호출 → 잔여 시간 신호(T_signal) 수신\n"
         "3. `should_continue: false` 수신 시 폭기 중단\n\n"
         "### 모델 구조\n"
-        "- **경과 < 80분**: XGBoost 단독 예측\n"
-        "- **경과 ≥ 80분**: XGBoost + LSTM 통합 (더 긴 시간 채택)"
+        f"- **경과 < {LSTM_WINDOW_THRESHOLD}분**: XGBoost 단독 예측\n"
+        f"- **경과 ≥ {LSTM_WINDOW_THRESHOLD}분**: XGBoost + LSTM 통합 (더 긴 시간 채택)"
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -228,11 +237,11 @@ app.add_middleware(
 
 class CycleStartRequest(BaseModel):
     reactor:          str   = Field(..., description="반응조 이름 (반응조A 또는 반응조B)")
-    nh4:              float = Field(..., description="암모니아성 질소 농도 (mg/L)")
-    no3:              float = Field(..., description="질산성 질소 농도 (mg/L)")
-    ph:               float = Field(..., description="수소이온농도")
-    temp:             float = Field(..., description="수온 (°C)")
-    current_r:        float = Field(..., description="포기기 R상 전류 (A)")
+    nh4:              float = Field(..., ge=0.0,  le=100.0, description="암모니아성 질소 농도 (mg/L)")
+    no3:              float = Field(..., ge=0.0,  le=100.0, description="질산성 질소 농도 (mg/L)")
+    ph:               float = Field(..., ge=0.0,  le=14.0,  description="수소이온농도")
+    temp:             float = Field(..., ge=0.0,  le=40.0,  description="수온 (°C)")
+    current_r:        float = Field(..., ge=0.0,  le=50.0,  description="포기기 R상 전류 (A)")
     nh4_no3_ratio:    float = Field(..., description="NH4/NO3 비율")
     do_saturation:    float = Field(..., description="용존산소 포화도")
     nh4_diff:         float = Field(..., description="NH4 변화량 (직전 대비)")
@@ -240,24 +249,26 @@ class CycleStartRequest(BaseModel):
     ph_diff:          float = Field(..., description="pH 변화량 (직전 대비)")
     nh4_rolling_mean: float = Field(..., description="NH4 이동평균 (최근 6스텝)")
     nh4_decay_rate:   float = Field(..., description="NH4 감소율")
-    hour_sin:         float = Field(..., description="시간 sin 인코딩")
-    hour_cos:         float = Field(..., description="시간 cos 인코딩")
-    weekday:          int   = Field(..., description="요일 (0=월요일 ~ 6=일요일)")
+    hour_sin:         float = Field(..., ge=-1.0, le=1.0,  description="시간 sin 인코딩")
+    hour_cos:         float = Field(..., ge=-1.0, le=1.0,  description="시간 cos 인코딩")
+    weekday:          int   = Field(..., ge=0,    le=6,     description="요일 (0=월요일 ~ 6=일요일)")
 
 
 class CycleStartResponse(BaseModel):
-    reactor:           str = Field(..., description="반응조 이름")
-    cycle_runtime_xgb: int = Field(..., description="XGBoost 예측 총 가동 시간 (분)")
-    cycle_id:        str = Field(..., description="사이클 ID (사이클 시작 시 생성된 고유값)")
+    reactor:           str  = Field(..., description="반응조 이름")
+    cycle_runtime_xgb: int  = Field(..., description="XGBoost 예측 총 가동 시간 (분)")
+    cycle_id:          UUID = Field(..., description="사이클 고유 ID")
+
 
 class PredictRequest(BaseModel):
     reactor:          str   = Field(..., description="반응조 이름 (반응조A 또는 반응조B)")
+    cycle_id:         UUID  = Field(..., description="사이클 고유 ID (/cycle/start 응답값)")
     elapsed_time:     int   = Field(..., description="사이클 시작 후 경과 시간 (분, 10분 단위)")
-    nh4:              float = Field(..., description="암모니아성 질소 농도 (mg/L)")
-    no3:              float = Field(..., description="질산성 질소 농도 (mg/L)")
-    ph:               float = Field(..., description="수소이온농도")
-    temp:             float = Field(..., description="수온 (°C)")
-    current_r:        float = Field(..., description="포기기 R상 전류 (A)")
+    nh4:              float = Field(..., ge=0.0,  le=100.0, description="암모니아성 질소 농도 (mg/L)")
+    no3:              float = Field(..., ge=0.0,  le=100.0, description="질산성 질소 농도 (mg/L)")
+    ph:               float = Field(..., ge=0.0,  le=14.0,  description="수소이온농도")
+    temp:             float = Field(..., ge=0.0,  le=40.0,  description="수온 (°C)")
+    current_r:        float = Field(..., ge=0.0,  le=50.0,  description="포기기 R상 전류 (A)")
     nh4_no3_ratio:    float = Field(..., description="NH4/NO3 비율")
     do_saturation:    float = Field(..., description="용존산소 포화도")
     nh4_diff:         float = Field(..., description="NH4 변화량 (직전 대비)")
@@ -265,17 +276,25 @@ class PredictRequest(BaseModel):
     ph_diff:          float = Field(..., description="pH 변화량 (직전 대비)")
     nh4_rolling_mean: float = Field(..., description="NH4 이동평균 (최근 6스텝)")
     nh4_decay_rate:   float = Field(..., description="NH4 감소율")
-    hour_sin:         float = Field(..., description="시간 sin 인코딩")
-    hour_cos:         float = Field(..., description="시간 cos 인코딩")
-    weekday:          int   = Field(..., description="요일 (0=월요일 ~ 6=일요일)")
-    cycle_id:        str   = Field(..., description="사이클 ID (사이클 시작 시 생성된 고유값)")
+    hour_sin:         float = Field(..., ge=-1.0, le=1.0,  description="시간 sin 인코딩")
+    hour_cos:         float = Field(..., ge=-1.0, le=1.0,  description="시간 cos 인코딩")
+    weekday:          int   = Field(..., ge=0,    le=6,     description="요일 (0=월요일 ~ 6=일요일)")
+
+    @field_validator("elapsed_time")
+    @classmethod
+    def validate_elapsed_time(cls, v: int) -> int:
+        if v % 10 != 0:
+            raise ValueError("elapsed_time은 10분 단위여야 합니다.")
+        return v
+
 
 class PredictResponse(BaseModel):
     reactor:         str  = Field(..., description="반응조 이름")
     elapsed_time:    int  = Field(..., description="경과 시간 (분)")
     t_signal:        int  = Field(..., description="잔여 가동 시간 신호 (분)")
-    mode:            str  = Field(..., description="예측 모드: xgb_only(경과<80분) 또는 integrated(경과≥80분)")
+    mode:            str  = Field(..., description="예측 모드: xgb_only 또는 integrated")
     should_continue: bool = Field(..., description="폭기 계속 여부 (false이면 중단)")
+    was_clamped:     bool = Field(..., description="Safety Clamping 적용 여부")
 
 
 # ── 헬퍼 ──────────────────────────────────────────────────────────────────────
@@ -342,6 +361,7 @@ async def cycle_history(reactor: str):
     _validate_reactor(reactor)
     return predictors[reactor].get_history()
 
+
 @app.get(
     "/metrics",
     summary="모델 성능 지표",
@@ -351,6 +371,8 @@ async def cycle_history(reactor: str):
 async def get_metrics():
     if not _metrics_cache:
         raise HTTPException(status_code=503, detail="검증 데이터가 없어 메트릭을 계산할 수 없습니다.")
+    mae_91  = _metrics_cache.get("stage_91_mae")
+    rmse_91 = _metrics_cache.get("stage_91_rmse")
     return {
         "test_month": "12월",
         "overall": {
@@ -358,18 +380,18 @@ async def get_metrics():
             "rmse": round(_metrics_cache["rmse"], 2),
         },
         "integrated": {
-            "mae":       _metrics_cache.get("stage_91_mae",  0),
-            "rmse":      _metrics_cache.get("stage_91_rmse", 0),
-            "mae_pass":  _metrics_cache.get("stage_91_mae",  99) < 30,
-            "rmse_pass": _metrics_cache.get("stage_91_rmse", 99) < 45,
+            "mae":       mae_91,
+            "rmse":      rmse_91,
+            "mae_pass":  mae_91  is not None and mae_91  < 30,
+            "rmse_pass": rmse_91 is not None and rmse_91 < 45,
         },
         "targets": {"mae": 30, "rmse": 45},
         "stages": _metrics_cache.get("stages", []),
         "model": {
             "xgb_threshold_min": LSTM_WINDOW_THRESHOLD,
-            "window_size": 9,
-            "hidden_size": 128,
-            "integration": "max(xgb_remain, lstm_remain)",
+            "window_size":       WINDOW_SIZE,
+            "hidden_size":       HIDDEN_SIZE,
+            "integration":       "max(xgb_remain, lstm_remain)",
         },
         "energy": _metrics_cache.get("energy"),
     }
@@ -383,8 +405,9 @@ async def get_metrics():
 )
 async def health():
     return {
-        "status": "정상",
+        "status":          "정상",
         "loaded_reactors": list(predictors.keys()),
+        "db_enabled":      _DB_ENABLED,
     }
 
 
@@ -405,16 +428,15 @@ async def cycle_start(req: CycleStartRequest):
     _validate_reactor(req.reactor)
     xgb_row = _to_xgb_series(req)
     predictor = predictors[req.reactor]
-    cycle_runtime_xgb = predictors[req.reactor].on_cycle_start(xgb_row)
-    cycle_id = str(uuid.uuid4())
-    predictor.current_cycle_id = cycle_id
+    cycle_runtime_xgb = predictor.on_cycle_start(xgb_row)
+    cycle_id = uuid4()
     logger.info(
         f"[START] reactor={req.reactor} runtime={cycle_runtime_xgb} cycle_id={cycle_id}"
     )
     return CycleStartResponse(
         reactor=req.reactor,
         cycle_runtime_xgb=cycle_runtime_xgb,
-        cycle_id=cycle_id
+        cycle_id=cycle_id,
     )
 
 
@@ -427,57 +449,49 @@ async def cycle_start(req: CycleStartRequest):
         "경과 시간에 따라 두 가지 예측 모드로 동작합니다:\n\n"
         "| 경과 시간 | 모드 | 설명 |\n"
         "|-----------|------|------|\n"
-        "| < 80분 | `xgb_only` | XGBoost 단독: `cycle_runtime - elapsed_time` |\n"
-        "| ≥ 80분 | `integrated` | XGBoost + LSTM 통합: 두 예측 중 더 긴 값 채택 |\n\n"
+        f"| < {LSTM_WINDOW_THRESHOLD}분 | `xgb_only` | XGBoost 단독: `cycle_runtime - elapsed_time` |\n"
+        f"| ≥ {LSTM_WINDOW_THRESHOLD}분 | `integrated` | XGBoost + LSTM 통합: 두 예측 중 더 긴 값 채택 |\n\n"
         "`should_continue: false` 수신 시 즉시 폭기를 중단하세요."
     ),
     tags=["폭기 제어"],
 )
 async def cycle_predict(req: PredictRequest):
     _validate_reactor(req.reactor)
-    predictor  = predictors[req.reactor]
-    cycle_id = req.cycle_id or getattr(predictor, "current_cycle_id", None)
-    if cycle_id is None:
-        raise HTTPException(400, "cycle_id가 없습니다. /cycle/start 먼저 호출하세요")
-    lstm_row   = _to_lstm_series(req)
-    t_signal   = predictor.predict(lstm_row, req.elapsed_time)
-    cont       = predictor.should_continue(t_signal)
-    mode       = "xgb_only" if req.elapsed_time < LSTM_WINDOW_THRESHOLD else "integrated"
-    data = {
-        "request_id": str(uuid.uuid4()),
-        "cycle_id": cycle_id,
-        "reactor": req.reactor,
-        "nh4": req.nh4,
-        "no3": req.no3,
-        "ph": req.ph,
-        "temp": req.temp,
-        "current_r": req.current_r,
+    predictor              = predictors[req.reactor]
+    lstm_row               = _to_lstm_series(req)
+    t_signal, was_clamped  = predictor.predict(lstm_row, req.elapsed_time)
+    cont                   = predictor.should_continue(t_signal)
+    mode                   = "xgb_only" if req.elapsed_time < LSTM_WINDOW_THRESHOLD else "integrated"
 
-        "nh4_no3_ratio": req.nh4_no3_ratio,
-        "do_saturation": req.do_saturation,
-
-        "nh4_diff": req.nh4_diff,
-        "no3_diff": req.no3_diff,
-        "ph_diff": req.ph_diff,
-
+    _save_to_db({
+        "request_id":      str(uuid4()),
+        "cycle_id":        str(req.cycle_id),
+        "reactor":         req.reactor,
+        "nh4":             req.nh4,
+        "no3":             req.no3,
+        "ph":              req.ph,
+        "temp":            req.temp,
+        "current_r":       req.current_r,
+        "nh4_no3_ratio":   req.nh4_no3_ratio,
+        "do_saturation":   req.do_saturation,
+        "nh4_diff":        req.nh4_diff,
+        "no3_diff":        req.no3_diff,
+        "ph_diff":         req.ph_diff,
         "nh4_rolling_mean": req.nh4_rolling_mean,
-        "nh4_decay_rate": req.nh4_decay_rate,
-
-        "hour_sin": req.hour_sin,
-        "hour_cos": req.hour_cos,
-        "weekday": req.weekday,
-
-        "elapsed_time": req.elapsed_time,
-        "t_signal": t_signal,
+        "nh4_decay_rate":  req.nh4_decay_rate,
+        "hour_sin":        req.hour_sin,
+        "hour_cos":        req.hour_cos,
+        "weekday":         req.weekday,
+        "elapsed_time":    req.elapsed_time,
+        "t_signal":        t_signal,
         "should_continue": cont,
-        "mode": mode
-    }
-
-    save_to_db(data)
+        "was_clamped":     was_clamped,
+        "mode":            mode,
+    })
 
     logger.info(
-        f"[PREDICT] reactor={req.reactor} "
-        f"t_signal={t_signal} continue={cont} cycle_id={req.cycle_id}"
+        f"[PREDICT] reactor={req.reactor} elapsed={req.elapsed_time} "
+        f"t_signal={t_signal} clamped={was_clamped} continue={cont} cycle_id={req.cycle_id}"
     )
 
     return PredictResponse(
@@ -486,17 +500,5 @@ async def cycle_predict(req: PredictRequest):
         t_signal=t_signal,
         mode=mode,
         should_continue=cont,
+        was_clamped=was_clamped,
     )
-'''
-@app.post(
-    "/train",
-    summary="모델 수동 재학습",
-    description="DB 데이터를 기반으로 XGBoost 모델을 백그라운드 재학습합니다.",
-    tags=["학습"]
-)
-async def train_model():
-
-    result = trainer.train_async()
-
-    return result
-'''
