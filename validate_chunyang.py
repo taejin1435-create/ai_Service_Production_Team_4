@@ -9,10 +9,13 @@ from integration import (
     AerationPredictor,
     LSTM_WINDOW_THRESHOLD,
     MIN_T_SIGNAL,
+    STOP_THRESHOLD,
+    EARLY_STOP_MARGIN,
     MAX_T_SIGNAL,
-    parse_datetime,
+    NH4_SAFETY_THRESHOLD,
     validate_on_december,
 )
+from utils import parse_datetime, underprediction_rate
 
 warnings.filterwarnings("ignore")
 
@@ -45,6 +48,9 @@ def validate_on_chunyang(predictor: AerationPredictor) -> dict:
     )
 
     t_signals, t_trues, elapsed_vals = [], [], []
+    stop_nh4_vals     = []
+    stop_elapsed_vals = []
+    actual_runtime_vals = []
     n_cycles = 0
     actual_total_min = predicted_total_min = 0.0
 
@@ -64,19 +70,47 @@ def validate_on_chunyang(predictor: AerationPredictor) -> dict:
         predicted_total_min += float(predictor._cycle_runtime_xgb)
         n_cycles += 1
 
+        stop_elapsed = None
+        stop_nh4     = None
         for _, row in cycle.iterrows():
             raw_elapsed = int(row["elapsed_time"])
-            t_signal    = predictor.predict(row, raw_elapsed)
+            t_signal, _ = predictor.predict(row, raw_elapsed)
             t_signals.append(t_signal)
             t_trues.append(float(row["T_remaining"]))
             elapsed_vals.append(raw_elapsed)
+
+            if stop_elapsed is None and t_signal <= STOP_THRESHOLD:
+                stop_elapsed = raw_elapsed
+                stop_nh4     = float(row["nh4"])
+
+        actual_runtime_vals.append(actual_runtime)
+        stop_elapsed_vals.append(stop_elapsed)
+        if stop_nh4 is not None:
+            stop_nh4_vals.append(stop_nh4)
 
     t_signals    = np.array(t_signals,    dtype=np.float32)
     t_trues      = np.array(t_trues,      dtype=np.float32)
     elapsed_vals = np.array(elapsed_vals, dtype=np.float32)
 
-    mae  = float(mean_absolute_error(t_trues, t_signals))
-    rmse = float(np.sqrt(mean_squared_error(t_trues, t_signals)))
+    mae   = float(mean_absolute_error(t_trues, t_signals))
+    rmse  = float(np.sqrt(mean_squared_error(t_trues, t_signals)))
+    under = underprediction_rate(t_signals, t_trues)
+
+    stop_nh4_arr  = np.array(stop_nh4_vals, dtype=np.float32)
+    nh4_risk_rate = float((stop_nh4_arr > NH4_SAFETY_THRESHOLD).mean()) if len(stop_nh4_arr) > 0 else 0.0
+
+    actual_arr        = np.array(actual_runtime_vals, dtype=np.float32)
+    stopped_mask      = np.array([s is not None for s in stop_elapsed_vals])
+    stop_elapsed_fill = np.array(
+        [s if s is not None else np.nan for s in stop_elapsed_vals], dtype=np.float32
+    )
+    time_diff    = actual_arr - stop_elapsed_fill
+    stopped_diff = time_diff[stopped_mask]
+
+    no_stop_rate    = float((~stopped_mask).mean())
+    avg_time_saved  = float(np.nanmean(stopped_diff))              if stopped_mask.sum() > 0 else 0.0
+    unsafe_early_stop_rate = float((stopped_diff > EARLY_STOP_MARGIN).mean()) if stopped_mask.sum() > 0 else 0.0
+    avg_overrun     = float(np.maximum(0.0, -stopped_diff).mean()) if stopped_mask.sum() > 0 else 0.0
 
     stages = []
     for label, lo, hi in [("0~30분", 0, 30), ("31~90분", 31, 90), ("91분+", 91, 9999)]:
@@ -94,13 +128,22 @@ def validate_on_chunyang(predictor: AerationPredictor) -> dict:
     stage_91_rmse = round(float(np.sqrt(mean_squared_error(t_trues[mask_91], t_signals[mask_91]))), 2) if mask_91.sum() > 0 else None
 
     return {
-        "mae":          round(mae,  2),
-        "rmse":         round(rmse, 2),
-        "stage_91_mae": stage_91_mae,
-        "stage_91_rmse":stage_91_rmse,
-        "stages":       stages,
-        "n_cycles":     n_cycles,
-        "n_steps":      len(t_signals),
+        "mae":                  round(mae,  2),
+        "rmse":                 round(rmse, 2),
+        "underprediction_rate": round(under, 4),
+        "nh4_risk_rate":        round(nh4_risk_rate, 4),
+        "stage_91_mae":         stage_91_mae,
+        "stage_91_rmse":        stage_91_rmse,
+        "stages":               stages,
+        "n_cycles":             n_cycles,
+        "n_steps":              len(t_signals),
+        "stop_kpi": {
+            "avg_time_saved":  round(avg_time_saved,  1),
+            "unsafe_early_stop_rate": round(unsafe_early_stop_rate, 4),
+            "avg_overrun":     round(avg_overrun,      1),
+            "no_stop_rate":    round(no_stop_rate,     4),
+            "nh4_risk_rate":   round(nh4_risk_rate,    4),
+        },
     }
 
 
@@ -117,6 +160,20 @@ def print_comparison(bongwha: dict, chunyang: dict) -> None:
     print("-" * 60)
     print(f"{'전체 MAE':20} {bongwha['mae']:>14.2f}분 {chunyang['mae']:>14.2f}분")
     print(f"{'전체 RMSE':20} {bongwha['rmse']:>14.2f}분 {chunyang['rmse']:>14.2f}분")
+    bh_under = bongwha.get('underprediction_rate', 0)
+    cy_under = chunyang.get('underprediction_rate', 0)
+    print(f"{'심각한 과소예측':20} {bh_under*100:>13.1f}% {cy_under*100:>13.1f}%")
+    bh_nh4 = bongwha.get('nh4_risk_rate', 0)
+    cy_nh4 = chunyang.get('nh4_risk_rate', 0)
+    print(f"{'수질 불량 위험':20} {bh_nh4*100:>13.1f}% {cy_nh4*100:>13.1f}%")
+    print("-" * 60)
+    bh_kpi = bongwha.get('stop_kpi', {})
+    cy_kpi = chunyang.get('stop_kpi', {})
+    print(f"{'[STOP KPI]':20}")
+    print(f"{'  평균 절감 시간':20} {bh_kpi.get('avg_time_saved', 0):>13.1f}분 {cy_kpi.get('avg_time_saved', 0):>13.1f}분")
+    print(f"{'  조기 종료율':20} {bh_kpi.get('unsafe_early_stop_rate', 0)*100:>13.1f}% {cy_kpi.get('unsafe_early_stop_rate', 0)*100:>13.1f}%")
+    print(f"{'  평균 초과 가동':20} {bh_kpi.get('avg_overrun', 0):>13.1f}분 {cy_kpi.get('avg_overrun', 0):>13.1f}분")
+    print(f"{'  STOP 미발생율':20} {bh_kpi.get('no_stop_rate', 0)*100:>13.1f}% {cy_kpi.get('no_stop_rate', 0)*100:>13.1f}%")
     print("-" * 60)
     print(f"{'[종료 판단] 91분+ MAE':20} {bongwha['stage_91_mae']:>14.2f}분 {str(chunyang['stage_91_mae'] or '-'):>14}분")
     print(f"{'[종료 판단] 91분+ RMSE':20} {bongwha['stage_91_rmse']:>14.2f}분 {str(chunyang['stage_91_rmse'] or '-'):>14}분")
