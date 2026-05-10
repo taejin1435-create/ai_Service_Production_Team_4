@@ -83,9 +83,10 @@ def to_start_payload(row, reactor: str) -> dict:
     }
 
 
-def to_predict_payload(row, reactor: str) -> dict:
+def to_predict_payload(row, reactor,cycle_id: str) -> dict:
     return {
         "reactor":          reactor,
+        "cycle_id":         cycle_id,
         "elapsed_time":     int(row["elapsed_time"]),
         "nh4":              float(row["nh4"]),
         "no3":              float(row["no3"]),
@@ -110,8 +111,10 @@ def run_simulation(reactor: str, interval: int) -> None:
 
     resp = requests.post(f"{API}/cycle/start", json=to_start_payload(xgb_row, reactor))
     resp.raise_for_status()
+    result = resp.json()
     xgb_runtime = resp.json()["cycle_runtime_xgb"]
-    safe_print(f"[{reactor}] /cycle/start → XGBoost 예측: {xgb_runtime}분")
+    cycle_id = result["cycle_id"]
+    safe_print(f"[{reactor}] /cycle/start → XGBoost 예측: {xgb_runtime}분 (cycle_id: {cycle_id})")
 
     safe_print(f"[{reactor}] {'경과':>6}  {'T_signal':>8}  {'예측종료':>8}  {'모드'}")
     safe_print(f"[{reactor}] {'-'*45}")

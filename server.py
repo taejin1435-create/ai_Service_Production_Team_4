@@ -9,6 +9,169 @@ from pydantic import BaseModel, Field
 
 from integration import AerationPredictor, LSTM_WINDOW_THRESHOLD, MIN_T_SIGNAL, validate_on_december
 
+import uuid
+import os
+import logging
+import threading
+import json
+import time
+import psycopg2
+from psycopg2.pool import SimpleConnectionPool
+from trainer import trainer
+from dotenv import load_dotenv
+load_dotenv()
+# 로그 폴더 생성
+os.makedirs("logs", exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("logs/aeration.log"),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger("aeration_api")
+
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST"),
+    "database": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "port": int(os.getenv("DB_PORT"))
+}
+
+pool: SimpleConnectionPool = None
+
+# DB 초기화
+def init_db():
+    conn = psycopg2.connect(**DB_CONFIG)
+    with conn.cursor() as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS aeration_log (
+            id SERIAL PRIMARY KEY,
+
+            request_id TEXT,
+            cycle_id TEXT,
+            reactor TEXT,
+
+            -- 🔹 원본 입력값
+            nh4 REAL,
+            no3 REAL,
+            ph REAL,
+            temp REAL,
+            current_r REAL,
+
+            nh4_no3_ratio REAL,
+            do_saturation REAL,
+
+            nh4_diff REAL,
+            no3_diff REAL,
+            ph_diff REAL,
+
+            nh4_rolling_mean REAL,
+            nh4_decay_rate REAL,
+
+            hour_sin REAL,
+            hour_cos REAL,
+            weekday INTEGER,
+
+            elapsed_time INTEGER,
+
+            -- 🔹 모델 결과
+            t_signal INTEGER,
+            should_continue BOOLEAN,
+            mode TEXT,
+
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+    conn.commit()
+    conn.close()
+
+# DB 저장
+def save_to_db(data: dict):
+    def _task():
+        conn = None
+
+        try:
+            conn = pool.getconn()
+
+            with conn.cursor() as cur:
+                cur.execute("""
+                INSERT INTO aeration_log (
+                    request_id, cycle_id, reactor,
+
+                    nh4, no3, ph, temp, current_r,
+                    nh4_no3_ratio, do_saturation,
+
+                    nh4_diff, no3_diff, ph_diff,
+                    nh4_rolling_mean, nh4_decay_rate,
+
+                    hour_sin, hour_cos, weekday,
+                    elapsed_time,
+
+                    t_signal, should_continue, mode
+                ) VALUES (
+                    %s,%s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s,%s,
+                    %s,%s,%s,
+                    %s,%s,
+                    %s,%s,%s,
+                    %s,
+                    %s,%s,%s
+                )
+                """, (
+                    data["request_id"],
+                    data["cycle_id"],
+                    data["reactor"],
+
+                    data["nh4"],
+                    data["no3"],
+                    data["ph"],
+                    data["temp"],
+                    data["current_r"],
+
+                    data["nh4_no3_ratio"],
+                    data["do_saturation"],
+
+                    data["nh4_diff"],
+                    data["no3_diff"],
+                    data["ph_diff"],
+
+                    data["nh4_rolling_mean"],
+                    data["nh4_decay_rate"],
+
+                    data["hour_sin"],
+                    data["hour_cos"],
+                    data["weekday"],
+
+                    data["elapsed_time"],
+
+                    data["t_signal"],
+                    data["should_continue"],
+                    data["mode"]
+                ))
+
+            conn.commit()
+
+            logger.info(
+                f"[DB 저장 완료] cycle={data['cycle_id']} t={data['t_signal']}"
+            )
+
+        except Exception as e:
+            logger.error(f"[DB 저장 실패] {str(e)}")
+
+        finally:
+            if conn:
+                pool.putconn(conn)
+
+    threading.Thread(target=_task, daemon=True).start()
+
+
+
 warnings.filterwarnings("ignore")
 
 VALID_REACTORS = {"반응조A", "반응조B"}
@@ -20,6 +183,9 @@ _metrics_cache: dict = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global pool
+    pool = SimpleConnectionPool(1, 10, **DB_CONFIG)
+    init_db()
     for reactor in VALID_REACTORS:
         predictors[reactor] = AerationPredictor()
     print("모델 로드 완료 (반응조A, 반응조B)")
@@ -82,7 +248,7 @@ class CycleStartRequest(BaseModel):
 class CycleStartResponse(BaseModel):
     reactor:           str = Field(..., description="반응조 이름")
     cycle_runtime_xgb: int = Field(..., description="XGBoost 예측 총 가동 시간 (분)")
-
+    cycle_id:        str = Field(..., description="사이클 ID (사이클 시작 시 생성된 고유값)")
 
 class PredictRequest(BaseModel):
     reactor:          str   = Field(..., description="반응조 이름 (반응조A 또는 반응조B)")
@@ -102,7 +268,7 @@ class PredictRequest(BaseModel):
     hour_sin:         float = Field(..., description="시간 sin 인코딩")
     hour_cos:         float = Field(..., description="시간 cos 인코딩")
     weekday:          int   = Field(..., description="요일 (0=월요일 ~ 6=일요일)")
-
+    cycle_id:        str   = Field(..., description="사이클 ID (사이클 시작 시 생성된 고유값)")
 
 class PredictResponse(BaseModel):
     reactor:         str  = Field(..., description="반응조 이름")
@@ -238,10 +404,17 @@ async def health():
 async def cycle_start(req: CycleStartRequest):
     _validate_reactor(req.reactor)
     xgb_row = _to_xgb_series(req)
+    predictor = predictors[req.reactor]
     cycle_runtime_xgb = predictors[req.reactor].on_cycle_start(xgb_row)
+    cycle_id = str(uuid.uuid4())
+    predictor.current_cycle_id = cycle_id
+    logger.info(
+        f"[START] reactor={req.reactor} runtime={cycle_runtime_xgb} cycle_id={cycle_id}"
+    )
     return CycleStartResponse(
         reactor=req.reactor,
         cycle_runtime_xgb=cycle_runtime_xgb,
+        cycle_id=cycle_id
     )
 
 
@@ -263,10 +436,49 @@ async def cycle_start(req: CycleStartRequest):
 async def cycle_predict(req: PredictRequest):
     _validate_reactor(req.reactor)
     predictor  = predictors[req.reactor]
+    cycle_id = req.cycle_id or getattr(predictor, "current_cycle_id", None)
+    if cycle_id is None:
+        raise HTTPException(400, "cycle_id가 없습니다. /cycle/start 먼저 호출하세요")
     lstm_row   = _to_lstm_series(req)
     t_signal   = predictor.predict(lstm_row, req.elapsed_time)
     cont       = predictor.should_continue(t_signal)
     mode       = "xgb_only" if req.elapsed_time < LSTM_WINDOW_THRESHOLD else "integrated"
+    data = {
+        "request_id": str(uuid.uuid4()),
+        "cycle_id": cycle_id,
+        "reactor": req.reactor,
+        "nh4": req.nh4,
+        "no3": req.no3,
+        "ph": req.ph,
+        "temp": req.temp,
+        "current_r": req.current_r,
+
+        "nh4_no3_ratio": req.nh4_no3_ratio,
+        "do_saturation": req.do_saturation,
+
+        "nh4_diff": req.nh4_diff,
+        "no3_diff": req.no3_diff,
+        "ph_diff": req.ph_diff,
+
+        "nh4_rolling_mean": req.nh4_rolling_mean,
+        "nh4_decay_rate": req.nh4_decay_rate,
+
+        "hour_sin": req.hour_sin,
+        "hour_cos": req.hour_cos,
+        "weekday": req.weekday,
+
+        "elapsed_time": req.elapsed_time,
+        "t_signal": t_signal,
+        "should_continue": cont,
+        "mode": mode
+    }
+
+    save_to_db(data)
+
+    logger.info(
+        f"[PREDICT] reactor={req.reactor} "
+        f"t_signal={t_signal} continue={cont} cycle_id={req.cycle_id}"
+    )
 
     return PredictResponse(
         reactor=req.reactor,
@@ -275,3 +487,16 @@ async def cycle_predict(req: PredictRequest):
         mode=mode,
         should_continue=cont,
     )
+'''
+@app.post(
+    "/train",
+    summary="모델 수동 재학습",
+    description="DB 데이터를 기반으로 XGBoost 모델을 백그라운드 재학습합니다.",
+    tags=["학습"]
+)
+async def train_model():
+
+    result = trainer.train_async()
+
+    return result
+'''
