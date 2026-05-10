@@ -1,4 +1,5 @@
 import warnings
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -7,39 +8,23 @@ import shap
 import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
+from features import XGB_FEATURES as FEATURES, XGB_MONOTONE_CONSTRAINTS as MONOTONE_CONSTRAINTS, XGB_TARGET as TARGET, XGB_FORBIDDEN as FORBIDDEN_FEATURES
+from utils import parse_datetime, underprediction_rate, update_metadata
+
 warnings.filterwarnings("ignore")
 
 
 BASE_DIR   = Path(__file__).parent
 DATA_DIR   = BASE_DIR / "data"
-MODEL_PATH = BASE_DIR / "xgboost_model.json"
+MODELS_DIR = BASE_DIR / "models"
+MODEL_PATH = MODELS_DIR / "xgboost_model.json"
 ENCODING = "cp949"
-MONTHS = [8, 9, 10, 12]
+MONTHS = [6, 7, 8, 9, 10, 11, 12]
 TRAIN_END = pd.Timestamp("2020-12-01")
-
-FEATURES = [
-    "nh4",
-    "no3",
-    "ph",
-    "temp",
-    "상전류(R)",
-    "nh4_no3_ratio",
-    "do_saturation",
-    "nh4_diff",
-    "no3_diff",
-    "ph_diff",
-    "nh4_rolling_mean",
-    "nh4_decay_rate",
-    "hour_sin",
-    "hour_cos",
-    "weekday",
-    "reactor",
-]
-
-MONOTONE_CONSTRAINTS = (1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0)
-
-TARGET = "cycle_runtime"
-FORBIDDEN_FEATURES = {"elapsed_time", "T_remaining", "current_aeration"}
+SEPT_IMPUTE = {
+    "temp":          (23.87, 21.33),
+    "do_saturation": (8.437, 8.843),
+}
 
 
 def assert_pipeline_integrity(features: list[str], constraints: tuple) -> None:
@@ -54,12 +39,15 @@ def assert_pipeline_integrity(features: list[str], constraints: tuple) -> None:
         raise ValueError("FEATURES 중복 존재")
 
 
-def parse_datetime(series: pd.Series) -> pd.Series:
-    result = pd.to_datetime(series, format="%m월%d월%y %H:%M", errors="coerce")
-    mask = result.isna()
-    if mask.any():
-        result[mask] = pd.to_datetime(series[mask], errors="coerce")
-    return result
+def impute_september(df: pd.DataFrame) -> pd.DataFrame:
+    sept_mask = df["수집시간"].dt.month == 9
+    if not sept_mask.any():
+        return df
+    df = df.copy()
+    t = (df.loc[sept_mask, "수집시간"].dt.day - 1) / 29
+    for col, (v_start, v_end) in SEPT_IMPUTE.items():
+        df.loc[sept_mask, col] = v_start + (v_end - v_start) * t
+    return df
 
 
 def load_xgb_data(months: list[int]) -> pd.DataFrame:
@@ -74,6 +62,7 @@ def load_xgb_data(months: list[int]) -> pd.DataFrame:
     if df["수집시간"].isna().any():
         n_bad = df["수집시간"].isna().sum()
         raise ValueError(f"수집시간 파싱 실패 행 {n_bad}건")
+    df = impute_september(df)
     return df.sort_values("수집시간").reset_index(drop=True)
 
 
@@ -102,7 +91,7 @@ def build_model() -> xgb.XGBRegressor:
         max_depth=6,
         subsample=0.8,
         colsample_bytree=0.8,
-        min_child_weight=10,
+        min_child_weight=5,
         gamma=1.0,
         reg_alpha=0.1,
         reg_lambda=1.0,
@@ -120,10 +109,12 @@ def predict_clipped(model: xgb.XGBRegressor, X: pd.DataFrame) -> np.ndarray:
 
 def evaluate(model: xgb.XGBRegressor, X: pd.DataFrame, y: pd.Series, label: str) -> dict:
     pred = predict_clipped(model, X)
-    mae = mean_absolute_error(y, pred)
-    rmse = float(np.sqrt(mean_squared_error(y, pred)))
-    print(f"[{label}] MAE: {mae:6.2f}분 | RMSE: {rmse:6.2f}분 | n={len(y)}")
-    return {"mae": mae, "rmse": rmse, "n": len(y)}
+    y_arr = np.asarray(y, dtype=np.float32)
+    mae  = mean_absolute_error(y_arr, pred)
+    rmse = float(np.sqrt(mean_squared_error(y_arr, pred)))
+    under = underprediction_rate(pred, y_arr)
+    print(f"[{label}] MAE: {mae:6.2f}분 | RMSE: {rmse:6.2f}분 | 심각한 과소예측: {under*100:.1f}% | n={len(y)}")
+    return {"mae": mae, "rmse": rmse, "underprediction_rate": under, "n": len(y)}
 
 
 def report_importance(model: xgb.XGBRegressor) -> pd.DataFrame:
@@ -140,6 +131,7 @@ def report_importance(model: xgb.XGBRegressor) -> pd.DataFrame:
     top1, top2 = df["gain"].iloc[0], df["gain"].iloc[1] if len(df) > 1 else 0.0
     if top2 > 0 and top1 / top2 >= 3.0:
         print(f"⚠ 지배적 피처 의심: {df.index[0]} (gain {top1:.2f} ≥ 2위 × 3)")
+    df.to_csv(MODELS_DIR / "feature_importance.csv")
     return df
 
 
@@ -155,6 +147,7 @@ def report_shap(model: xgb.XGBRegressor, X_sample: pd.DataFrame) -> pd.DataFrame
     top5 = set(df.head(5).index)
     if not (quality_features & top5):
         print("⚠ 수질 피처가 SHAP 상위 5위 내 부재 — 모델 재검토 권장")
+    df.to_csv(MODELS_DIR / "shap_importance.csv")
     return df
 
 
@@ -198,6 +191,14 @@ def main() -> None:
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(MODEL_PATH))
     print(f"\n모델 저장: {MODEL_PATH}")
+
+    update_metadata({
+        "trained_at": str(date.today()),
+        "metrics": {
+            "xgb_mae":  round(test_metrics["mae"],  2),
+            "xgb_rmse": round(test_metrics["rmse"], 2),
+        },
+    }, MODELS_DIR)
     print(f"목표 대비: MAE {'PASS' if test_metrics['mae'] < 60 else 'FAIL'} (<60) | "
           f"RMSE {'PASS' if test_metrics['rmse'] < 75 else 'FAIL'} (<75)")
 
